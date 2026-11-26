@@ -11,25 +11,61 @@ struct DayDetailView: View {
     var body: some View {
         let lunar = calendarVM.selectedDayLunar
         let almanac = calendarVM.selectedDayAlmanac
-        let badges = calendarVM.selectedDayFestivalsAndTerms
 
-        VStack(alignment: .leading, spacing: 8) {
-            // 1. Selected Date + Lunar + Relative Header
-            HStack(alignment: .top, spacing: 8) {
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: 6) {
-                        Text(calendarVM.selectedDayGregorianTitle)
-                            .font(.subheadline.weight(.semibold))
-                        Text(calendarVM.selectedDayRelativeDescription)
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    }
-                    Text("农历：\(lunar.fullLunarText)")
-                        .font(.caption)
+        VStack(alignment: .leading, spacing: 10) {
+            // Card 1: Lunar & GanZhi Hero Card
+            heroLunarCard(lunar: lunar, almanac: almanac)
+
+            // Card 2: Multi-Row Highlights, Reminders & Countdowns Card
+            highlightsAndRemindersCard(lunar: lunar)
+
+            // Card 3: Compact Chinese Almanac Card
+            almanacCard(almanac: almanac)
+        }
+        .sheet(isPresented: $showingNewEventSheet) {
+            QuickNewEventSheet(calendarVM: calendarVM)
+        }
+        .sheet(isPresented: $showingNewReminderSheet) {
+            QuickNewReminderSheet(calendarVM: calendarVM)
+        }
+    }
+
+    // MARK: - Card 1: Hero Lunar Card
+    private func heroLunarCard(lunar: LunarDateInfo, almanac: ChineseAlmanacInfo) -> some View {
+        HStack(alignment: .center, spacing: 10) {
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text("\(lunar.monthName)\(lunar.dayName)")
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundStyle(Color.accentColor)
+
+                    Text(calendarVM.selectedDayRelativeDescription)
+                        .font(.caption2.weight(.medium))
                         .foregroundStyle(.secondary)
                 }
 
-                Spacer()
+                HStack(spacing: 6) {
+                    Text("\(almanac.yearPillar)\(lunar.zodiac)年 \(almanac.monthPillar)月 \(almanac.dayPillar)日")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    if let seasonal = lunar.seasonalLabel {
+                        Text(seasonal)
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(.orange)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1)
+                            .background(Color.orange.opacity(0.12), in: Capsule())
+                    }
+                }
+            }
+
+            Spacer()
+
+            VStack(alignment: .trailing, spacing: 4) {
+                Text(shortGregorianTitle(calendarVM.selectedDate))
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.secondary)
 
                 Menu {
                     Button {
@@ -44,202 +80,382 @@ struct DayDetailView: View {
                     }
                 } label: {
                     Label("新建", systemImage: "plus")
-                        .font(.caption)
+                        .font(.caption2.weight(.medium))
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(Color.accentColor.opacity(0.12), in: Capsule())
+                        .foregroundStyle(Color.accentColor)
                 }
                 .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
                 .fixedSize()
             }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(cardBackground)
+    }
 
-            // 2. Holiday / Solar Term / Festival Badges
-            if !badges.isEmpty {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 6) {
-                        ForEach(badges, id: \.self) { badge in
-                            Text(badge)
-                                .font(.caption2.weight(.medium))
-                                .padding(.horizontal, 7)
-                                .padding(.vertical, 2)
-                                .background(badgeColor(badge).opacity(0.14), in: Capsule())
-                                .foregroundStyle(badgeColor(badge))
-                        }
-                    }
-                }
+    // MARK: - Card 2: Multi-Row Highlights, Reminders & Countdowns
+    private func highlightsAndRemindersCard(lunar: LunarDateInfo) -> some View {
+        let now = Date()
+        let selectedTags = selectedDayRowItems(lunar: lunar)
+        let isViewingToday = Calendar.current.isDateInToday(calendarVM.selectedDate)
+
+        // Upcoming reminders excluding items already shown for selectedDate
+        let selectedRemIDs = Set(calendarVM.remindersForSelectedDate.map(\.id))
+        let extraUpcomingReminders = calendarVM.upcomingReminders
+            .filter { !selectedRemIDs.contains($0.id) }
+            .prefix(3)
+
+        let selectedEventIDs = Set(calendarVM.eventsForSelectedDate.compactMap(\.eventIdentifier))
+        let extraUpcomingEvents = calendarVM.upcomingEvents
+            .filter { ev in
+                guard let id = ev.eventIdentifier else { return true }
+                return !selectedEventIDs.contains(id)
             }
+            .prefix(2)
 
-            // 3. Almanac (老黄历) Card
-            VStack(alignment: .leading, spacing: 5) {
-                HStack(spacing: 6) {
-                    Text(almanac.dayTypeLabel)
-                        .font(.system(size: 10, weight: .bold))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(almanac.isAuspiciousDay ? Color.green : Color.secondary, in: Capsule())
-
-                    Text("\(almanac.twelveSpirit)日 · \(almanac.jianChu)执 · \(almanac.chongSha) · \(almanac.dayNaYin)")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-
-                    Spacer()
-
-                    Button {
-                        withAnimation(.easeInOut(duration: 0.15)) {
-                            isAlmanacExpanded.toggle()
-                        }
-                    } label: {
-                        Image(systemName: isAlmanacExpanded ? "chevron.up" : "chevron.down")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    }
-                    .buttonStyle(.borderless)
-                    .help(isAlmanacExpanded ? "收起干支与彭祖百忌" : "展开干支三柱与彭祖百忌")
-                }
-
-                HStack(alignment: .top, spacing: 6) {
-                    Text("宜")
-                        .font(.system(size: 10, weight: .bold))
-                        .foregroundStyle(.white)
-                        .frame(width: 16, height: 16)
-                        .background(Color.green, in: RoundedRectangle(cornerRadius: 4))
-                    Text(almanac.yi.joined(separator: "、"))
-                        .font(.caption2)
-                        .foregroundStyle(.primary)
-                        .lineLimit(1)
-                }
-
-                HStack(alignment: .top, spacing: 6) {
-                    Text("忌")
-                        .font(.system(size: 10, weight: .bold))
-                        .foregroundStyle(.white)
-                        .frame(width: 16, height: 16)
-                        .background(Color.red.opacity(0.85), in: RoundedRectangle(cornerRadius: 4))
-                    Text(almanac.ji.joined(separator: "、"))
-                        .font(.caption2)
-                        .foregroundStyle(.primary)
-                        .lineLimit(1)
-                }
-
-                if isAlmanacExpanded {
-                    Divider()
-                    Text("干支：\(almanac.yearPillar)年 \(almanac.monthPillar)月 \(almanac.dayPillar)日")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                    Text("彭祖百忌：\(almanac.pengZu)")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-            .padding(8)
-            .background(.quaternary.opacity(0.32), in: RoundedRectangle(cornerRadius: 8))
-
-            // 4. Events & Reminders List
+        return VStack(alignment: .leading, spacing: 0) {
             if !calendarVM.calendarAccessGranted && !calendarVM.remindersAccessGranted {
                 HStack(spacing: 8) {
                     Image(systemName: "calendar.badge.exclamationmark")
                         .foregroundStyle(.orange)
-                    Text("尚未授权系统日历与提醒事项")
+                    Text("授权系统日历与提醒事项后可显示日程倒计时")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     Spacer()
-                    Button("授权读取") {
+                    Button("授权") {
                         Task {
                             _ = await calendarVM.requestCalendarAccess()
                             _ = await calendarVM.requestRemindersAccess()
                         }
                     }
-                    .controlSize(.small)
+                    .controlSize(.mini)
+                    .buttonStyle(.bordered)
                 }
-                .padding(8)
-                .background(.quaternary.opacity(0.45), in: RoundedRectangle(cornerRadius: 8))
-            } else {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 5) {
-                        if calendarVM.eventsForSelectedDate.isEmpty && calendarVM.remindersForSelectedDate.isEmpty {
-                            Text("当天暂无日程或提醒事项")
-                                .font(.caption)
-                                .foregroundStyle(.tertiary)
-                                .frame(maxWidth: .infinity, alignment: .center)
-                                .padding(.vertical, 8)
-                        }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 9)
+                Divider().opacity(0.5)
+            }
 
-                        ForEach(calendarVM.eventsForSelectedDate, id: \.eventIdentifier) { event in
-                            HStack(spacing: 8) {
-                                RoundedRectangle(cornerRadius: 2)
-                                    .fill(Color(cgColor: event.calendar.cgColor))
-                                    .frame(width: 3, height: 22)
-                                VStack(alignment: .leading, spacing: 1) {
-                                    Text(event.title ?? "(无标题)")
-                                        .font(.caption.weight(.medium))
-                                        .lineLimit(1)
-                                    Text(formatEventTime(event))
-                                        .font(.caption2)
-                                        .foregroundStyle(.secondary)
-                                }
-                                Spacer()
-                            }
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 4)
-                            .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 6))
-                        }
+            // 1. Selected day's festivals / solar term / holiday rows
+            ForEach(selectedTags, id: \.title) { tag in
+                countdownRow(
+                    accentColor: tag.color,
+                    title: tag.title,
+                    subtitle: tag.subtitle,
+                    rightNumber: isViewingToday ? "今天" : relativeNumber(to: calendarVM.selectedDate),
+                    rightUnit: isViewingToday ? "" : "天"
+                )
+                Divider().opacity(0.45)
+            }
 
-                        ForEach(calendarVM.remindersForSelectedDate) { reminder in
-                            Button {
-                                Task { await calendarVM.toggleReminder(reminder) }
-                            } label: {
-                                HStack(spacing: 8) {
-                                    Image(systemName: reminder.isCompleted ? "checkmark.circle.fill" : "circle")
-                                        .foregroundStyle(reminder.isCompleted ? Color.green : Color.secondary)
-                                    Text(reminder.title)
-                                        .font(.caption)
-                                        .strikethrough(reminder.isCompleted)
-                                        .foregroundStyle(reminder.isCompleted ? .secondary : .primary)
-                                        .lineLimit(1)
-                                    Spacer()
-                                    if let due = reminder.dueDate {
-                                        Text(formatHourMinute(due))
-                                            .font(.caption2)
-                                            .foregroundStyle(.secondary)
-                                    }
-                                }
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 4)
-                                .background(.quaternary.opacity(0.25), in: RoundedRectangle(cornerRadius: 6))
-                            }
-                            .buttonStyle(.plain)
+            // 2. Selected day's user reminders (checkable + live countdown!)
+            ForEach(calendarVM.remindersForSelectedDate) { rem in
+                reminderRow(rem, now: now)
+                Divider().opacity(0.45)
+            }
+
+            // 3. Selected day's deduplicated user events
+            ForEach(calendarVM.eventsForSelectedDate, id: \.eventIdentifier) { event in
+                eventRow(event, now: now)
+                Divider().opacity(0.45)
+            }
+
+            // 4. Upcoming reminders (always show how far away user's reminders are!)
+            ForEach(Array(extraUpcomingReminders)) { rem in
+                reminderRow(rem, now: now, tagPrefix: "待办")
+                Divider().opacity(0.45)
+            }
+
+            // 5. Upcoming events
+            ForEach(Array(extraUpcomingEvents), id: \.eventIdentifier) { event in
+                eventRow(event, now: now, tagPrefix: "日程")
+                Divider().opacity(0.45)
+            }
+
+            // 6. Next Solar Term countdown (e.g. 大雪 · 十月廿九 | 周一 · 11 天)
+            if let term = calendarVM.nextSolarTerm, term.name != lunar.solarTerm {
+                countdownRow(
+                    accentColor: .teal,
+                    title: term.name,
+                    subtitle: "\(term.lunarText) | \(term.weekdayCN)",
+                    rightNumber: "\(term.daysRemaining)",
+                    rightUnit: "天"
+                )
+                if calendarVM.nextHoliday != nil {
+                    Divider().opacity(0.45)
+                }
+            }
+
+            // 7. Next Statutory Holiday countdown (e.g. 元旦 · 1月1日 | 周五 · 36 天)
+            if let nextHol = calendarVM.nextHoliday {
+                countdownRow(
+                    accentColor: .orange,
+                    title: nextHol.isOngoing ? "\(nextHol.name)假期中" : nextHol.name,
+                    subtitle: "\(monthDayAndWeekday(nextHol.startDate)) · 法定假期",
+                    rightNumber: nextHol.isOngoing ? "假期中" : "\(nextHol.daysRemaining)",
+                    rightUnit: nextHol.isOngoing ? "" : "天"
+                )
+            }
+        }
+        .background(cardBackground)
+    }
+
+    // MARK: - Card 3: Almanac (老黄历)
+    private func almanacCard(almanac: ChineseAlmanacInfo) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Text(almanac.dayTypeLabel)
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(almanac.isAuspiciousDay ? Color.green : Color.secondary, in: Capsule())
+
+                Text("\(almanac.twelveSpirit)日 · \(almanac.jianChu)执 · \(almanac.chongSha) · \(almanac.dayNaYin)")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+
+                Spacer()
+
+                Button {
+                    withAnimation(.easeInOut(duration: 0.15)) {
+                        isAlmanacExpanded.toggle()
+                    }
+                } label: {
+                    Image(systemName: isAlmanacExpanded ? "chevron.up" : "chevron.down")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.borderless)
+                .help(isAlmanacExpanded ? "收起彭祖百忌" : "展开彭祖百忌")
+            }
+
+            HStack(alignment: .top, spacing: 6) {
+                Text("宜")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 16, height: 16)
+                    .background(Color.green, in: RoundedRectangle(cornerRadius: 4))
+                Text(almanac.yi.joined(separator: "、"))
+                    .font(.caption2)
+                    .foregroundStyle(.primary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            HStack(alignment: .top, spacing: 6) {
+                Text("忌")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 16, height: 16)
+                    .background(Color.red.opacity(0.85), in: RoundedRectangle(cornerRadius: 4))
+                Text(almanac.ji.joined(separator: "、"))
+                    .font(.caption2)
+                    .foregroundStyle(.primary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if isAlmanacExpanded {
+                Divider().opacity(0.5)
+                Text("彭祖百忌：\(almanac.pengZu)")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .background(cardBackground)
+    }
+
+    // MARK: - Row Components
+    private func countdownRow(
+        accentColor: Color,
+        title: String,
+        subtitle: String,
+        rightNumber: String,
+        rightUnit: String,
+        isOverdue: Bool = false
+    ) -> some View {
+        HStack(spacing: 10) {
+            RoundedRectangle(cornerRadius: 1.5)
+                .fill(accentColor)
+                .frame(width: 3, height: 26)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.system(size: 13.5, weight: .medium))
+                    .lineLimit(1)
+                Text(subtitle)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+
+            Spacer()
+
+            HStack(alignment: .firstTextBaseline, spacing: 2) {
+                Text(rightNumber)
+                    .font(.system(size: rightUnit.isEmpty ? 12 : 16, weight: .semibold, design: .rounded))
+                    .foregroundStyle(isOverdue ? Color.red.opacity(0.85) : Color.primary)
+                if !rightUnit.isEmpty {
+                    Text(rightUnit)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+    }
+
+    private func reminderRow(_ rem: CalendarReminderItem, now: Date, tagPrefix: String? = nil) -> some View {
+        let countdown = rem.dueDate.map { CountdownFormatter.describe(from: now, to: $0, isAllDay: false) }
+        let dueText = rem.dueDate.map { dateAndTimeText($0) } ?? "无截止时间"
+        let subtitle = tagPrefix != nil ? "\(tagPrefix!) · \(dueText)" : dueText
+
+        return Button {
+            Task { await calendarVM.toggleReminder(rem) }
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: rem.isCompleted ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 14))
+                    .foregroundStyle(rem.isCompleted ? Color.green : Color.accentColor)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(rem.title)
+                        .font(.system(size: 13.5, weight: .medium))
+                        .strikethrough(rem.isCompleted)
+                        .foregroundStyle(rem.isCompleted ? .secondary : .primary)
+                        .lineLimit(1)
+                    Text(subtitle)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+
+                Spacer()
+
+                if !rem.isCompleted, let countdown {
+                    HStack(alignment: .firstTextBaseline, spacing: 2) {
+                        Text(countdown.number)
+                            .font(.system(size: countdown.unit.isEmpty ? 12 : 15, weight: .semibold, design: .rounded))
+                            .foregroundStyle(countdown.isOverdue ? Color.red.opacity(0.85) : Color.accentColor)
+                        if !countdown.unit.isEmpty {
+                            Text(countdown.unit)
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
                         }
                     }
                 }
-                .frame(maxHeight: 110)
             }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .contentShape(Rectangle())
         }
-        .sheet(isPresented: $showingNewEventSheet) {
-            QuickNewEventSheet(calendarVM: calendarVM)
-        }
-        .sheet(isPresented: $showingNewReminderSheet) {
-            QuickNewReminderSheet(calendarVM: calendarVM)
-        }
+        .buttonStyle(.plain)
     }
 
-    private func badgeColor(_ badge: String) -> Color {
-        if badge.contains("休") && !badge.contains("调休") { return .green }
-        if badge.contains("调休") { return .orange }
-        if badge.contains("节气") { return .teal }
-        return .accentColor
+    private func eventRow(_ event: EKEvent, now: Date, tagPrefix: String? = nil) -> some View {
+        let start = event.startDate ?? now
+        let countdown = CountdownFormatter.describe(from: now, to: start, isAllDay: event.isAllDay)
+        let timeStr = event.isAllDay ? "\(monthDayAndWeekday(start)) · 全天" : dateAndTimeText(start)
+        let subtitle = tagPrefix != nil ? "\(tagPrefix!) · \(timeStr)" : timeStr
+
+        return countdownRow(
+            accentColor: Color(cgColor: event.calendar.cgColor),
+            title: event.title ?? "(无标题)",
+            subtitle: subtitle,
+            rightNumber: countdown.number,
+            rightUnit: countdown.unit,
+            isOverdue: countdown.isOverdue
+        )
     }
 
-    private func formatEventTime(_ event: EKEvent) -> String {
-        if event.isAllDay { return "全天" }
+    // MARK: - Helpers
+    private struct TagRowModel {
+        let title: String
+        let subtitle: String
+        let color: Color
+    }
+
+    private func selectedDayRowItems(lunar: LunarDateInfo) -> [TagRowModel] {
+        let dateSub = monthDayAndWeekday(calendarVM.selectedDate)
+        var items: [TagRowModel] = []
+        var seenTitles = Set<String>()
+
+        if let h = calendarVM.selectedDayHoliday {
+            let label = h.isOffDay ? "\(h.name)（休）" : "\(h.name)（调休上班）"
+            items.append(TagRowModel(title: label, subtitle: "\(dateSub) · 法定安排", color: h.isOffDay ? .green : .orange))
+            seenTitles.insert(h.name)
+        }
+        if let term = lunar.solarTerm, !seenTitles.contains(term) {
+            items.append(TagRowModel(title: "节气 · \(term)", subtitle: "\(dateSub) · 二十四节气", color: .teal))
+            seenTitles.insert(term)
+        }
+        for tag in lunar.extraFestivals where !seenTitles.contains(tag.name) {
+            let subLabel: String
+            let color: Color
+            switch tag.category {
+            case .traditional:
+                subLabel = "\(dateSub) · 传统节日"
+                color = .accentColor
+            case .gregorian:
+                subLabel = "\(dateSub) · 节日"
+                color = .accentColor
+            case .commemorative:
+                subLabel = "\(dateSub) · 纪念日"
+                color = .indigo
+            case .seasonal:
+                subLabel = "\(dateSub) · 伏九时令"
+                color = .orange
+            }
+            items.append(TagRowModel(title: tag.name, subtitle: subLabel, color: color))
+            seenTitles.insert(tag.name)
+        }
+        return items
+    }
+
+    private var cardBackground: some View {
+        RoundedRectangle(cornerRadius: 12, style: .continuous)
+            .fill(Color(nsColor: .controlBackgroundColor).opacity(0.72))
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .strokeBorder(Color.primary.opacity(0.06), lineWidth: 0.5)
+            )
+    }
+
+    private func shortGregorianTitle(_ date: Date) -> String {
         let df = DateFormatter()
-        df.dateFormat = "HH:mm"
-        return "\(df.string(from: event.startDate)) - \(df.string(from: event.endDate))"
-    }
-
-    private func formatHourMinute(_ date: Date) -> String {
-        let df = DateFormatter()
-        df.dateFormat = "HH:mm"
+        df.locale = Locale(identifier: "zh_CN")
+        df.dateFormat = "M月d日 EEEE"
         return df.string(from: date)
+    }
+
+    private func monthDayAndWeekday(_ date: Date) -> String {
+        let df = DateFormatter()
+        df.locale = Locale(identifier: "zh_CN")
+        df.dateFormat = "M月d日 | EEE"
+        return df.string(from: date)
+    }
+
+    private func dateAndTimeText(_ date: Date) -> String {
+        let df = DateFormatter()
+        df.locale = Locale(identifier: "zh_CN")
+        df.dateFormat = "M月d日 HH:mm | EEE"
+        return df.string(from: date)
+    }
+
+    private func relativeNumber(to date: Date) -> String {
+        let cal = Calendar.current
+        let today = cal.startOfDay(for: Date())
+        let target = cal.startOfDay(for: date)
+        let days = cal.dateComponents([.day], from: today, to: target).day ?? 0
+        if days > 0 { return "\(days)" }
+        return "已过\(-days)"
     }
 }
 

@@ -257,7 +257,7 @@ final class StatusBarController: NSObject {
 
     private func configurePanels() {
         mainPanel = FloatingPanelController(
-            panelSize: NSSize(width: 410, height: 610),
+            panelSize: NSSize(width: 420, height: 640),
             rootView: MainPopoverView(
                 clockVM: clockVM,
                 calendarVM: calendarVM,

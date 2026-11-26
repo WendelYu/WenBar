@@ -64,20 +64,20 @@ struct MainPopoverView: View {
             switch selectedTab {
             case .calendar:
                 if settingsStore.settings.enableClockCalendar {
-                    ScrollView {
+                    ScrollView(.vertical) {
                         VStack(spacing: 10) {
                             CalendarMonthView(calendarVM: calendarVM)
-                            Divider()
                             DayDetailView(calendarVM: calendarVM)
 
                             if settingsStore.settings.enableDiskManager
                                 && settingsStore.settings.showDisksInMainPopover
                                 && !diskManager.externalVolumes.isEmpty {
-                                Divider()
                                 compactDiskBar
                             }
                         }
+                        .padding(.bottom, 4)
                     }
+                    .scrollIndicators(.hidden)
                 } else {
                     Spacer()
                     Text("时钟与日历模块已在设置中关闭")
@@ -99,7 +99,7 @@ struct MainPopoverView: View {
             }
         }
         .padding(14)
-        .frame(width: 410, height: 610, alignment: .top)
+        .frame(width: 420, height: 640, alignment: .top)
         .background(adaptiveBackground)
         .onAppear {
             if !settingsStore.settings.enableClockCalendar && settingsStore.settings.enableDiskManager {
@@ -196,6 +196,16 @@ struct MainPopoverView: View {
                 }
             }
         }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color(nsColor: .controlBackgroundColor).opacity(0.72))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .strokeBorder(Color.primary.opacity(0.06), lineWidth: 0.5)
+                )
+        )
     }
 
     @ViewBuilder

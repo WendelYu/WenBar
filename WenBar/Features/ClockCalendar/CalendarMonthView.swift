@@ -9,13 +9,14 @@ struct CalendarMonthView: View {
 
     var body: some View {
         VStack(spacing: 8) {
-            // Row 1: Quick Year & Month Switcher
+            // Header: Clean single-chevron Year/Month picker + navigation
             HStack(spacing: 6) {
                 Button {
                     calendarVM.goToPreviousYear()
                 } label: {
                     Image(systemName: "chevron.left.2")
                         .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.borderless)
                 .help("上一年")
@@ -25,6 +26,7 @@ struct CalendarMonthView: View {
                 } label: {
                     Image(systemName: "chevron.left")
                         .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.borderless)
                 .help("上一月")
@@ -47,15 +49,18 @@ struct CalendarMonthView: View {
                         }
                     }
                 } label: {
-                    HStack(spacing: 2) {
+                    HStack(spacing: 3) {
                         Text("\(String(calendarVM.displayedYear))年")
-                            .font(.headline)
+                            .font(.system(size: 16, weight: .semibold))
                         Image(systemName: "chevron.down")
                             .font(.system(size: 9, weight: .semibold))
                             .foregroundStyle(.secondary)
                     }
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 2)
                 }
                 .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
                 .fixedSize()
 
                 Menu {
@@ -65,15 +70,18 @@ struct CalendarMonthView: View {
                         }
                     }
                 } label: {
-                    HStack(spacing: 2) {
+                    HStack(spacing: 3) {
                         Text("\(calendarVM.displayedMonthNumber)月")
-                            .font(.headline)
+                            .font(.system(size: 16, weight: .semibold))
                         Image(systemName: "chevron.down")
                             .font(.system(size: 9, weight: .semibold))
                             .foregroundStyle(.secondary)
                     }
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 2)
                 }
                 .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
                 .fixedSize()
 
                 Button {
@@ -81,6 +89,7 @@ struct CalendarMonthView: View {
                 } label: {
                     Image(systemName: "chevron.right")
                         .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.borderless)
                 .help("下一月")
@@ -90,11 +99,22 @@ struct CalendarMonthView: View {
                 } label: {
                     Image(systemName: "chevron.right.2")
                         .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.borderless)
                 .help("下一年")
 
                 Spacer()
+
+                Button {
+                    Task { await calendarVM.syncOnlineHolidays() }
+                } label: {
+                    Image(systemName: calendarVM.isSyncingHolidays ? "arrow.triangle.2.circlepath.circle.fill" : "arrow.clockwise")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.borderless)
+                .help("节假日数据：\(calendarVM.holidaySyncStatus)")
 
                 Button("今天") {
                     calendarVM.goToToday()
@@ -102,54 +122,20 @@ struct CalendarMonthView: View {
                 .controlSize(.small)
                 .buttonStyle(.bordered)
             }
-
-            // Row 2: Holiday countdown + Sync
-            HStack(spacing: 6) {
-                if let next = calendarVM.nextHoliday {
-                    HStack(spacing: 4) {
-                        Image(systemName: "sparkles")
-                            .font(.caption2)
-                        if next.isOngoing {
-                            Text("\(next.name)假期中")
-                        } else {
-                            Text("距离下个假期「\(next.name)」还有 \(next.daysRemaining) 天")
-                        }
-                    }
-                    .font(.caption2.weight(.medium))
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 3)
-                    .background(Color.accentColor.opacity(0.12), in: Capsule())
-                    .foregroundStyle(Color.accentColor)
-                }
-
-                Spacer()
-
-                Button {
-                    Task { await calendarVM.syncOnlineHolidays() }
-                } label: {
-                    HStack(spacing: 3) {
-                        Image(systemName: calendarVM.isSyncingHolidays ? "arrow.triangle.2.circlepath.circle.fill" : "arrow.clockwise")
-                        Text(calendarVM.holidaySyncStatus)
-                    }
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                }
-                .buttonStyle(.borderless)
-                .help("刷新国务院最新放假与调休数据")
-            }
+            .padding(.horizontal, 2)
 
             // Weekday header
-            LazyVGrid(columns: columns, spacing: 4) {
+            LazyVGrid(columns: columns, spacing: 2) {
                 ForEach(Array(weekdayHeaders.enumerated()), id: \.offset) { index, title in
                     Text(title)
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(index >= 5 ? Color.red.opacity(0.8) : Color.secondary)
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(index >= 5 ? Color.red.opacity(0.78) : Color.secondary)
                         .frame(maxWidth: .infinity)
                 }
             }
 
-            // 6x7 day grid
-            LazyVGrid(columns: columns, spacing: 4) {
+            // Clean airy 6x7 day grid
+            LazyVGrid(columns: columns, spacing: 3) {
                 ForEach(calendarVM.gridDays) { day in
                     dayCell(day)
                 }
@@ -165,13 +151,13 @@ struct CalendarMonthView: View {
             calendarVM.selectDate(day.date)
         } label: {
             ZStack(alignment: .topTrailing) {
-                VStack(spacing: 1) {
+                VStack(spacing: 1.5) {
                     Text("\(day.dayNumber)")
-                        .font(.system(size: 13, weight: day.isToday || isSelected ? .bold : .medium, design: .rounded))
+                        .font(.system(size: 14, weight: day.isToday || isSelected ? .semibold : .medium, design: .rounded))
                         .foregroundStyle(dayTextColor(day: day, isSelected: isSelected))
 
                     Text(day.subtitle)
-                        .font(.system(size: 9))
+                        .font(.system(size: 9.5))
                         .lineLimit(1)
                         .minimumScaleFactor(0.75)
                         .foregroundStyle(subtitleColor(day: day, isSelected: isSelected))
@@ -194,7 +180,7 @@ struct CalendarMonthView: View {
                 }
             }
             .background(cellBackground(day: day, isSelected: isSelected))
-            .opacity(day.isCurrentMonth ? 1.0 : 0.42)
+            .opacity(day.isCurrentMonth ? 1.0 : 0.35)
         }
         .buttonStyle(.plain)
     }
@@ -204,13 +190,16 @@ struct CalendarMonthView: View {
         if day.isToday { return .accentColor }
         if day.holiday?.isOffDay == true { return .green }
         if day.holiday?.isOffDay == false { return .primary }
-        if day.isWeekend { return .red.opacity(0.85) }
+        if day.isWeekend { return .red.opacity(0.82) }
         return .primary
     }
 
     private func subtitleColor(day: CalendarGridDay, isSelected: Bool) -> Color {
-        if isSelected { return .white.opacity(0.9) }
-        if day.holiday?.isOffDay == true || day.lunarInfo.traditionalFestival != nil || day.lunarInfo.solarTerm != nil {
+        if isSelected { return .white.opacity(0.92) }
+        if day.holiday?.isOffDay == true
+            || day.lunarInfo.traditionalFestival != nil
+            || day.lunarInfo.solarTerm != nil
+            || day.lunarInfo.gregorianFestival != nil {
             return .accentColor
         }
         return .secondary
@@ -219,18 +208,18 @@ struct CalendarMonthView: View {
     @ViewBuilder
     private func cellBackground(day: CalendarGridDay, isSelected: Bool) -> some View {
         if isSelected {
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
                 .fill(Color.accentColor)
         } else if day.isToday {
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .fill(Color.accentColor.opacity(0.14))
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .fill(Color.accentColor.opacity(0.12))
                 .overlay(
-                    RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .strokeBorder(Color.accentColor.opacity(0.5), lineWidth: 1)
+                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        .strokeBorder(Color.accentColor.opacity(0.45), lineWidth: 1)
                 )
         } else {
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .fill(Color.primary.opacity(0.03))
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .fill(Color.clear)
         }
     }
 }
