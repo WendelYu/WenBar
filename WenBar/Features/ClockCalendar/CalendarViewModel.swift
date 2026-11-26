@@ -38,6 +38,30 @@ struct CalendarEventItem: Identifiable, Sendable {
 
 private final class EventStoreBox: @unchecked Sendable {
     let store = EKEventStore()
+
+    func requestFullAccessToEvents() async throws -> Bool {
+        try await withCheckedThrowingContinuation { continuation in
+            store.requestFullAccessToEvents { granted, error in
+                if let error {
+                    continuation.resume(throwing: error)
+                } else {
+                    continuation.resume(returning: granted)
+                }
+            }
+        }
+    }
+
+    func requestFullAccessToReminders() async throws -> Bool {
+        try await withCheckedThrowingContinuation { continuation in
+            store.requestFullAccessToReminders { granted, error in
+                if let error {
+                    continuation.resume(throwing: error)
+                } else {
+                    continuation.resume(returning: granted)
+                }
+            }
+        }
+    }
 }
 
 @MainActor
@@ -120,7 +144,7 @@ final class CalendarViewModel {
 
     func requestCalendarAccess() async -> Bool {
         do {
-            let granted = try await eventStore.requestFullAccessToEvents()
+            let granted = try await eventStoreBox.requestFullAccessToEvents()
             calendarAccessGranted = granted
             if granted {
                 await refreshWritableCalendarsOffMain()
@@ -135,7 +159,7 @@ final class CalendarViewModel {
 
     func requestRemindersAccess() async -> Bool {
         do {
-            let granted = try await eventStore.requestFullAccessToReminders()
+            let granted = try await eventStoreBox.requestFullAccessToReminders()
             remindersAccessGranted = granted
             if granted {
                 await loadSelectedDateItems()
