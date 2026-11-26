@@ -1,0 +1,431 @@
+import Foundation
+import EventKit
+import WenBarCore
+
+struct CalendarGridDay: Identifiable {
+    let id: String
+    let date: Date
+    let dayNumber: Int
+    let isCurrentMonth: Bool
+    let isToday: Bool
+    let isWeekend: Bool
+    let subtitle: String
+    let holiday: HolidayDay?
+    let lunarInfo: LunarDateInfo
+    let hasEvents: Bool
+}
+
+struct CalendarReminderItem: Identifiable, Sendable {
+    let id: String
+    let title: String
+    let isCompleted: Bool
+    let dueDate: Date?
+}
+
+@MainActor
+@Observable
+final class CalendarViewModel {
+    var displayedMonth: Date = Date()
+    var selectedDate: Date = Date()
+    var gridDays: [CalendarGridDay] = []
+    var nextHoliday: NextHolidayCountdown?
+    var isSyncingHolidays: Bool = false
+    var holidaySyncStatus: String = "内置离线数据"
+
+    // EventKit & Selected Day Rich Info
+    var eventsForSelectedDate: [EKEvent] = []
+    var remindersForSelectedDate: [CalendarReminderItem] = []
+    var selectedDayHoliday: HolidayDay?
+    var calendarAccessGranted: Bool = false
+    var remindersAccessGranted: Bool = false
+    var availableWritableCalendars: [EKCalendar] = []
+
+    private nonisolated(unsafe) let eventStore = EKEventStore()
+    private let holidayRepo: HolidayRepository
+    private let settingsStore: SettingsStore
+
+    private let gregorianCal: Calendar = {
+        var cal = Calendar(identifier: .gregorian)
+        cal.firstWeekday = 2 // Monday first
+        return cal
+    }()
+
+    init(settingsStore: SettingsStore) {
+        self.settingsStore = settingsStore
+        let fallbackURL = Bundle.main.url(forResource: "holidays_fallback", withExtension: "json")
+        let fallbackData = fallbackURL.flatMap { try? Data(contentsOf: $0) }
+        self.holidayRepo = HolidayRepository(fallbackJSONData: fallbackData)
+
+        refreshAuthorizationStatus()
+        Task {
+            await rebuildGrid()
+            await refreshNextHoliday()
+            if settingsStore.settings.autoSyncHolidays {
+                await syncOnlineHolidays()
+            }
+            await loadSelectedDateItems()
+        }
+    }
+
+    func refreshAuthorizationStatus() {
+        let calStatus = EKEventStore.authorizationStatus(for: .event)
+        let remStatus = EKEventStore.authorizationStatus(for: .reminder)
+        calendarAccessGranted = (calStatus == .fullAccess)
+        remindersAccessGranted = (remStatus == .fullAccess)
+        if calendarAccessGranted {
+            availableWritableCalendars = eventStore.calendars(for: .event).filter { $0.allowsContentModifications }
+        }
+    }
+
+    func requestCalendarAccess() async -> Bool {
+        do {
+            let granted = try await eventStore.requestFullAccessToEvents()
+            calendarAccessGranted = granted
+            if granted {
+                availableWritableCalendars = eventStore.calendars(for: .event).filter { $0.allowsContentModifications }
+                await loadSelectedDateItems()
+                await rebuildGrid()
+            }
+            return granted
+        } catch {
+            return false
+        }
+    }
+
+    func requestRemindersAccess() async -> Bool {
+        do {
+            let granted = try await eventStore.requestFullAccessToReminders()
+            remindersAccessGranted = granted
+            if granted {
+                await loadSelectedDateItems()
+            }
+            return granted
+        } catch {
+            return false
+        }
+    }
+
+    var displayedYear: Int {
+        gregorianCal.component(.year, from: displayedMonth)
+    }
+
+    var displayedMonthNumber: Int {
+        gregorianCal.component(.month, from: displayedMonth)
+    }
+
+    func goToPreviousYear() {
+        guard let prev = gregorianCal.date(byAdding: .year, value: -1, to: displayedMonth) else { return }
+        displayedMonth = prev
+        Task { await rebuildGrid() }
+    }
+
+    func goToNextYear() {
+        guard let next = gregorianCal.date(byAdding: .year, value: 1, to: displayedMonth) else { return }
+        displayedMonth = next
+        Task { await rebuildGrid() }
+    }
+
+    func jumpTo(year: Int, month: Int) {
+        var comps = DateComponents()
+        comps.year = year
+        comps.month = month
+        comps.day = 1
+        if let target = gregorianCal.date(from: comps) {
+            displayedMonth = target
+            Task { await rebuildGrid() }
+        }
+    }
+
+    func goToPreviousMonth() {
+        guard let prev = gregorianCal.date(byAdding: .month, value: -1, to: displayedMonth) else { return }
+        displayedMonth = prev
+        Task { await rebuildGrid() }
+    }
+
+    func goToNextMonth() {
+        guard let next = gregorianCal.date(byAdding: .month, value: 1, to: displayedMonth) else { return }
+        displayedMonth = next
+        Task { await rebuildGrid() }
+    }
+
+    func goToToday() {
+        let now = Date()
+        displayedMonth = now
+        selectedDate = now
+        Task {
+            await rebuildGrid()
+            await loadSelectedDateItems()
+            await refreshNextHoliday()
+        }
+    }
+
+    func selectDate(_ date: Date) {
+        selectedDate = date
+        if !gregorianCal.isDate(date, equalTo: displayedMonth, toGranularity: .month) {
+            displayedMonth = date
+            Task { await rebuildGrid() }
+        }
+        Task { await loadSelectedDateItems() }
+    }
+
+    func syncOnlineHolidays() async {
+        guard !isSyncingHolidays else { return }
+        isSyncingHolidays = true
+        defer { isSyncingHolidays = false }
+
+        let currentYear = gregorianCal.component(.year, from: Date())
+        let updated = await holidayRepo.syncYears([currentYear, currentYear + 1])
+        if updated > 0 {
+            let df = DateFormatter()
+            df.dateFormat = "MM-dd HH:mm"
+            holidaySyncStatus = "已同步 (\(df.string(from: Date())))"
+            await rebuildGrid()
+            await refreshNextHoliday()
+        } else {
+            holidaySyncStatus = "使用离线缓存"
+        }
+    }
+
+    func refreshNextHoliday() async {
+        nextHoliday = await holidayRepo.nextHoliday(from: Date())
+    }
+
+    func rebuildGrid() async {
+        let monthStart = gregorianCal.date(
+            from: gregorianCal.dateComponents([.year, .month], from: displayedMonth)
+        ) ?? displayedMonth
+
+        let weekday = gregorianCal.component(.weekday, from: monthStart)
+        // Monday = 2 -> offset 0; Sunday = 1 -> offset 6
+        let leadingOffset = (weekday - 2 + 7) % 7
+        guard let gridStart = gregorianCal.date(byAdding: .day, value: -leadingOffset, to: monthStart) else {
+            return
+        }
+
+        let eventDatesSet = fetchEventDaysInMonthRange(start: gridStart, count: 42)
+        var days: [CalendarGridDay] = []
+        days.reserveCapacity(42)
+
+        for idx in 0..<42 {
+            guard let date = gregorianCal.date(byAdding: .day, value: idx, to: gridStart) else { continue }
+            let key = HolidayRepository.dateKey(for: date)
+            let holiday = await holidayRepo.holiday(forKey: key)
+            let lunar = LunarCalendarEngine.info(for: date)
+            let subtitle = LunarCalendarEngine.cellSubtitle(for: date, holiday: holiday)
+            let wd = gregorianCal.component(.weekday, from: date)
+
+            days.append(
+                CalendarGridDay(
+                    id: key,
+                    date: date,
+                    dayNumber: gregorianCal.component(.day, from: date),
+                    isCurrentMonth: gregorianCal.isDate(date, equalTo: displayedMonth, toGranularity: .month),
+                    isToday: gregorianCal.isDateInToday(date),
+                    isWeekend: wd == 1 || wd == 7,
+                    subtitle: subtitle,
+                    holiday: holiday,
+                    lunarInfo: lunar,
+                    hasEvents: eventDatesSet.contains(key)
+                )
+            )
+        }
+
+        gridDays = days
+    }
+
+    func loadSelectedDateItems() async {
+        refreshAuthorizationStatus()
+        let start = gregorianCal.startOfDay(for: selectedDate)
+        guard let end = gregorianCal.date(byAdding: .day, value: 1, to: start) else { return }
+
+        if calendarAccessGranted {
+            let predicate = eventStore.predicateForEvents(withStart: start, end: end, calendars: nil)
+            eventsForSelectedDate = eventStore.events(matching: predicate)
+                .sorted { $0.startDate < $1.startDate }
+        } else {
+            eventsForSelectedDate = []
+        }
+
+        let selectedKey = HolidayRepository.dateKey(for: selectedDate)
+        selectedDayHoliday = await holidayRepo.holiday(forKey: selectedKey)
+
+        if remindersAccessGranted {
+            let fetched = await fetchRemindersOffMain()
+            remindersForSelectedDate = fetched.filter { reminder in
+                guard let due = reminder.dueDate else { return false }
+                return gregorianCal.isDate(due, inSameDayAs: start)
+            }
+        } else {
+            remindersForSelectedDate = []
+        }
+    }
+
+    private nonisolated func fetchRemindersOffMain() async -> [CalendarReminderItem] {
+        let predicate = eventStore.predicateForReminders(in: nil)
+        return await withCheckedContinuation { continuation in
+            eventStore.fetchReminders(matching: predicate) { reminders in
+                let mapped = (reminders ?? []).map { rem in
+                    CalendarReminderItem(
+                        id: rem.calendarItemIdentifier,
+                        title: rem.title ?? "(待办)",
+                        isCompleted: rem.isCompleted,
+                        dueDate: rem.dueDateComponents?.date
+                    )
+                }
+                continuation.resume(returning: mapped)
+            }
+        }
+    }
+
+    func toggleReminder(_ item: CalendarReminderItem) async {
+        guard remindersAccessGranted,
+              let reminder = eventStore.calendarItem(withIdentifier: item.id) as? EKReminder else { return }
+        reminder.isCompleted.toggle()
+        try? eventStore.save(reminder, commit: true)
+        await loadSelectedDateItems()
+    }
+
+    func createEvent(
+        title: String,
+        isAllDay: Bool,
+        startDate: Date,
+        endDate: Date,
+        calendarIdentifier: String?,
+        alarmMinutesBefore: Int?
+    ) async throws {
+        if !calendarAccessGranted {
+            let granted = await requestCalendarAccess()
+            if !granted {
+                throw NSError(domain: "WenBarCalendar", code: 403, userInfo: [NSLocalizedDescriptionKey: "未授予系统日历权限"])
+            }
+        }
+
+        let event = EKEvent(eventStore: eventStore)
+        event.title = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        event.isAllDay = isAllDay
+        event.startDate = startDate
+        event.endDate = max(endDate, startDate.addingTimeInterval(isAllDay ? 0 : 1800))
+
+        if let calID = calendarIdentifier, let cal = eventStore.calendar(withIdentifier: calID) {
+            event.calendar = cal
+        } else {
+            event.calendar = eventStore.defaultCalendarForNewEvents
+        }
+
+        if let mins = alarmMinutesBefore, mins >= 0 {
+            event.addAlarm(EKAlarm(relativeOffset: TimeInterval(-mins * 60)))
+        }
+
+        try eventStore.save(event, span: .thisEvent, commit: true)
+        await loadSelectedDateItems()
+        await rebuildGrid()
+    }
+
+    func createReminder(title: String, dueDate: Date, notes: String?) async throws {
+        if !remindersAccessGranted {
+            let granted = await requestRemindersAccess()
+            if !granted {
+                throw NSError(domain: "WenBarCalendar", code: 403, userInfo: [NSLocalizedDescriptionKey: "未授予系统提醒事项权限"])
+            }
+        }
+
+        let reminder = EKReminder(eventStore: eventStore)
+        reminder.title = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        reminder.calendar = eventStore.defaultCalendarForNewReminders()
+        reminder.dueDateComponents = gregorianCal.dateComponents([.year, .month, .day, .hour, .minute], from: dueDate)
+        if let notes, !notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            reminder.notes = notes
+        }
+        try eventStore.save(reminder, commit: true)
+        await loadSelectedDateItems()
+    }
+
+    var selectedDayLunar: LunarDateInfo {
+        LunarCalendarEngine.info(for: selectedDate)
+    }
+
+    var selectedDayAlmanac: ChineseAlmanacInfo {
+        ChineseAlmanacEngine.info(for: selectedDate)
+    }
+
+    var selectedDayRelativeDescription: String {
+        let today = gregorianCal.startOfDay(for: Date())
+        let target = gregorianCal.startOfDay(for: selectedDate)
+        let days = gregorianCal.dateComponents([.day], from: today, to: target).day ?? 0
+        let week = gregorianCal.component(.weekOfYear, from: selectedDate)
+        let rel: String
+        switch days {
+        case 0: rel = "今天"
+        case 1: rel = "明天"
+        case -1: rel = "昨天"
+        case let d where d > 1: rel = "\(d)天后"
+        default: rel = "\(-days)天前"
+        }
+        return "\(rel) · 第\(week)周"
+    }
+
+    var selectedDayGregorianTitle: String {
+        let df = DateFormatter()
+        df.locale = Locale(identifier: "zh_CN")
+        df.dateFormat = "yyyy年M月d日 EEEE"
+        return df.string(from: selectedDate)
+    }
+
+    var selectedDayFestivalsAndTerms: [String] {
+        var badges: [String] = []
+        let lunar = selectedDayLunar
+        if let h = selectedDayHoliday {
+            badges.append(h.isOffDay ? "\(h.name) · 休" : "\(h.name) · 调休上班")
+        }
+        if let term = lunar.solarTerm {
+            badges.append("节气 · \(term)")
+        }
+        if let trad = lunar.traditionalFestival, !badges.contains(where: { $0.contains(trad) }) {
+            badges.append(trad)
+        }
+        if let greg = lunar.gregorianFestival, !badges.contains(where: { $0.contains(greg) }) {
+            badges.append(greg)
+        }
+        return badges
+    }
+
+    func calculateDateDiff(from: Date, to: Date) async -> DateCalculator.DiffResult {
+        let all = await holidayRepo.allHolidays()
+        let map = Dictionary(uniqueKeysWithValues: all.map { ($0.date, $0) })
+        return DateCalculator.difference(from: from, to: to, holidays: map)
+    }
+
+    var monthTitleString: String {
+        let df = DateFormatter()
+        df.locale = Locale(identifier: "zh_CN")
+        df.dateFormat = "yyyy年 M月"
+        return df.string(from: displayedMonth)
+    }
+
+    var selectedDayFullSummary: String {
+        let lunar = LunarCalendarEngine.info(for: selectedDate)
+        let df = DateFormatter()
+        df.locale = Locale(identifier: "zh_CN")
+        df.dateFormat = "M月d日 EEEE"
+        var parts = [df.string(from: selectedDate), lunar.fullLunarText]
+        if let term = lunar.solarTerm { parts.append(term) }
+        if let fest = lunar.traditionalFestival { parts.append(fest) }
+        return parts.joined(separator: " · ")
+    }
+
+    private func fetchEventDaysInMonthRange(start: Date, count: Int) -> Set<String> {
+        guard calendarAccessGranted,
+              let end = gregorianCal.date(byAdding: .day, value: count, to: start) else {
+            return []
+        }
+        let predicate = eventStore.predicateForEvents(withStart: start, end: end, calendars: nil)
+        let events = eventStore.events(matching: predicate)
+        var keys = Set<String>()
+        for ev in events {
+            if let s = ev.startDate {
+                keys.insert(HolidayRepository.dateKey(for: s))
+            }
+        }
+        return keys
+    }
+}

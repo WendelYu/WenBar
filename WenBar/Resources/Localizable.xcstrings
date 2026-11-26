@@ -1,0 +1,132 @@
+{
+  "sourceLanguage" : "zh-Hans",
+  "strings" : {
+    "WenBar" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "WenBar"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "WenBar"
+          }
+        }
+      }
+    },
+    "打开日历面板" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open Calendar Panel"
+          }
+        }
+      }
+    },
+    "外接磁盘管理" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "External Drives"
+          }
+        }
+      }
+    },
+    "设置…" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Settings…"
+          }
+        }
+      }
+    },
+    "权限检查与引导…" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Permissions & Onboarding…"
+          }
+        }
+      }
+    },
+    "退出 WenBar" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Quit WenBar"
+          }
+        }
+      }
+    },
+    "日历" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Calendar"
+          }
+        }
+      }
+    },
+    "工具" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Utilities"
+          }
+        }
+      }
+    },
+    "磁盘" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Drives"
+          }
+        }
+      }
+    },
+    "今天" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Today"
+          }
+        }
+      }
+    },
+    "清理并推出" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Clean & Eject"
+          }
+        }
+      }
+    },
+    "全部清理并推出" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Clean & Eject All"
+          }
+        }
+      }
+    }
+  },
+  "version" : "1.0"
+}
