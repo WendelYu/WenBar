@@ -41,15 +41,17 @@ final class FloatingPanelController: NSObject {
 
         let p = FloatingMenuBarPanel(
             contentRect: NSRect(origin: .zero, size: panelSize),
-            styleMask: [.borderless],
+            styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
         )
-        p.level = .floating
+        p.hidesOnDeactivate = false
+        p.becomesKeyOnlyIfNeeded = false
+        p.level = .statusBar
         p.isOpaque = false
         p.backgroundColor = .clear
         p.hasShadow = true
-        p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient, .ignoresCycle]
         p.isMovable = false
         p.contentViewController = hc
         self.panel = p
@@ -61,8 +63,9 @@ final class FloatingPanelController: NSObject {
         anchorButton = button
         lastOpenedAt = Date()
         positionPanel(relativeTo: button)
-        NSApp.activate(ignoringOtherApps: true)
+        panel.orderFrontRegardless()
         panel.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
         installDismissMonitors()
     }
 
@@ -136,6 +139,9 @@ final class FloatingPanelController: NSObject {
         ) { [weak self] _ in
             Task { @MainActor in
                 guard let self, self.panel.isVisible, self.panel.attachedSheet == nil else { return }
+                if Date().timeIntervalSince(self.lastOpenedAt) < 0.25 {
+                    return
+                }
                 self.close()
             }
         }

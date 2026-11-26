@@ -73,8 +73,9 @@ final class CalendarViewModel {
         let fallbackData = fallbackURL.flatMap { try? Data(contentsOf: $0) }
         self.holidayRepo = HolidayRepository(fallbackJSONData: fallbackData)
 
-        refreshAuthorizationStatus()
+        refreshAuthorizationStatus(loadCalendars: false)
         Task {
+            await refreshWritableCalendarsOffMain()
             await rebuildGrid()
             await refreshNextHoliday()
             await loadSelectedDateItems()
@@ -86,14 +87,29 @@ final class CalendarViewModel {
         }
     }
 
-    func refreshAuthorizationStatus() {
+    func refreshAuthorizationStatus(loadCalendars: Bool = true) {
         let calStatus = EKEventStore.authorizationStatus(for: .event)
         let remStatus = EKEventStore.authorizationStatus(for: .reminder)
         calendarAccessGranted = (calStatus == .fullAccess)
         remindersAccessGranted = (remStatus == .fullAccess)
-        if calendarAccessGranted {
+        if calendarAccessGranted && loadCalendars {
             availableWritableCalendars = eventStore.calendars(for: .event).filter { $0.allowsContentModifications }
+        } else if !calendarAccessGranted {
+            availableWritableCalendars = []
         }
+    }
+
+    private func refreshWritableCalendarsOffMain() async {
+        guard calendarAccessGranted else {
+            availableWritableCalendars = []
+            return
+        }
+        let idsAndWritable = await Task.detached { [eventStore] in
+            eventStore.calendars(for: .event)
+                .filter { $0.allowsContentModifications }
+                .map { $0.calendarIdentifier }
+        }.value
+        availableWritableCalendars = idsAndWritable.compactMap { eventStore.calendar(withIdentifier: $0) }
     }
 
     func requestCalendarAccess() async -> Bool {
@@ -101,7 +117,7 @@ final class CalendarViewModel {
             let granted = try await eventStore.requestFullAccessToEvents()
             calendarAccessGranted = granted
             if granted {
-                availableWritableCalendars = eventStore.calendars(for: .event).filter { $0.allowsContentModifications }
+                await refreshWritableCalendarsOffMain()
                 await loadSelectedDateItems()
                 await rebuildGrid()
             }

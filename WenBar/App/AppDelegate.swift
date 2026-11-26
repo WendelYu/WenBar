@@ -89,8 +89,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func openSettingsWindow() {
         if let settingsWindow {
-            NSApp.activate(ignoringOtherApps: true)
+            settingsWindow.orderFrontRegardless()
             settingsWindow.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
             return
         }
 
@@ -121,12 +122,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.contentViewController = NSHostingController(rootView: view)
         self.settingsWindow = window
 
-        NSApp.activate(ignoringOtherApps: true)
+        window.orderFrontRegardless()
         window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     func openOnboardingWindow() {
         if let onboardingWindow {
+            onboardingWindow.orderFrontRegardless()
             onboardingWindow.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
             return
@@ -149,6 +152,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.contentViewController = NSHostingController(rootView: view)
         self.onboardingWindow = window
 
+        window.orderFrontRegardless()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
@@ -174,6 +178,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             )
         )
         self.customCompressWindow = window
+        window.orderFrontRegardless()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
@@ -219,6 +224,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             )
         )
         self.passwordWindow = window
+        window.orderFrontRegardless()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
