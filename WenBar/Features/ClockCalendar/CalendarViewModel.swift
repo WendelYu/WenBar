@@ -36,6 +36,10 @@ struct CalendarEventItem: Identifiable, Sendable {
     let isSubscriptionType: Bool
 }
 
+private final class EventStoreBox: @unchecked Sendable {
+    let store = EKEventStore()
+}
+
 @MainActor
 @Observable
 final class CalendarViewModel {
@@ -57,7 +61,8 @@ final class CalendarViewModel {
     var remindersAccessGranted: Bool = false
     var availableWritableCalendars: [EKCalendar] = []
 
-    private nonisolated(unsafe) let eventStore = EKEventStore()
+    private let eventStoreBox = EventStoreBox()
+    private var eventStore: EKEventStore { eventStoreBox.store }
     private let holidayRepo: HolidayRepository
     private let settingsStore: SettingsStore
 
@@ -104,8 +109,9 @@ final class CalendarViewModel {
             availableWritableCalendars = []
             return
         }
-        let idsAndWritable = await Task.detached { [eventStore] in
-            eventStore.calendars(for: .event)
+        let box = eventStoreBox
+        let idsAndWritable = await Task.detached {
+            box.store.calendars(for: .event)
                 .filter { $0.allowsContentModifications }
                 .map { $0.calendarIdentifier }
         }.value
@@ -283,7 +289,7 @@ final class CalendarViewModel {
             let futureEnd = gregorianCal.date(byAdding: .day, value: 60, to: now) ?? end
             let queryStart = min(start, gregorianCal.startOfDay(for: now))
             let queryEnd = max(end, futureEnd)
-            let rawAll = await fetchEventsOffMain(from: queryStart, to: queryEnd)
+            let rawAll = await Self.fetchEventsOffMain(using: eventStoreBox, from: queryStart, to: queryEnd)
 
             let rawForSelected = rawAll.filter { ev in
                 ev.endDate > start && ev.startDate < end
@@ -307,7 +313,7 @@ final class CalendarViewModel {
         }
 
         if remindersAccessGranted {
-            let fetched = await fetchRemindersOffMain()
+            let fetched = await Self.fetchRemindersOffMain(using: eventStoreBox)
             remindersForSelectedDate = fetched
                 .filter { reminder in
                     guard let due = reminder.dueDate else { return false }
@@ -330,10 +336,10 @@ final class CalendarViewModel {
         }
     }
 
-    private nonisolated func fetchRemindersOffMain() async -> [CalendarReminderItem] {
-        let predicate = eventStore.predicateForReminders(in: nil)
-        return await withCheckedContinuation { continuation in
-            eventStore.fetchReminders(matching: predicate) { reminders in
+    private nonisolated static func fetchRemindersOffMain(using box: EventStoreBox) async -> [CalendarReminderItem] {
+        await withCheckedContinuation { continuation in
+            let predicate = box.store.predicateForReminders(in: nil)
+            box.store.fetchReminders(matching: predicate) { reminders in
                 let mapped = (reminders ?? []).map { rem in
                     CalendarReminderItem(
                         id: rem.calendarItemIdentifier,
@@ -488,7 +494,7 @@ final class CalendarViewModel {
               let end = gregorianCal.date(byAdding: .day, value: count, to: start) else {
             return []
         }
-        let events = await fetchEventsOffMain(from: start, to: end)
+        let events = await Self.fetchEventsOffMain(using: eventStoreBox, from: start, to: end)
         var keys = Set<String>()
         for ev in events {
             if isRedundantSubscribedHolidayEvent(ev) { continue }
@@ -497,10 +503,10 @@ final class CalendarViewModel {
         return keys
     }
 
-    private nonisolated func fetchEventsOffMain(from start: Date, to end: Date) async -> [CalendarEventItem] {
-        await Task.detached { [eventStore] in
-            let predicate = eventStore.predicateForEvents(withStart: start, end: end, calendars: nil)
-            return eventStore.events(matching: predicate)
+    private nonisolated static func fetchEventsOffMain(using box: EventStoreBox, from start: Date, to end: Date) async -> [CalendarEventItem] {
+        await Task.detached {
+            let predicate = box.store.predicateForEvents(withStart: start, end: end, calendars: nil)
+            return box.store.events(matching: predicate)
                 .sorted { $0.startDate < $1.startDate }
                 .map { ev in
                     let rgba = Self.extractRGBAComponents(from: ev.calendar.cgColor)

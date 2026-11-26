@@ -2,8 +2,11 @@ name: Release DMG & Auto-Update Assets
 
 on:
   push:
+    branches:
+      - 'main'
     tags:
       - 'v*'
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -22,13 +25,19 @@ jobs:
         run: cd Packages/WenBarCore && swift test
 
       - name: Build DMG and ZIP packages
-        env:
-          VERSION: ${{ github.ref_name }}
         run: |
-          CLEAN_VERSION="${VERSION#v}"
-          bash scripts/package-dmg.sh "$CLEAN_VERSION"
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            CLEAN_VERSION="${GITHUB_REF_NAME#v}"
+          else
+            CLEAN_VERSION="$(awk -F'"' '/MARKETING_VERSION:/ { print $2; exit }' project.yml)"
+            CLEAN_VERSION="${CLEAN_VERSION:-1.0.0}"
+          fi
+          BUILD_NUMBER="$(awk -F'"' '/CURRENT_PROJECT_VERSION:/ { print $2; exit }' project.yml)"
+          BUILD_NUMBER="${BUILD_NUMBER:-${{ github.run_number }}}"
+          BUILD_NUMBER="$BUILD_NUMBER" bash scripts/package-dmg.sh "$CLEAN_VERSION"
 
       - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
           files: |

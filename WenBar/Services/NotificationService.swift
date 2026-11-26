@@ -16,10 +16,13 @@ final class NotificationService {
         }
     }
 
-    func authorizationStatus() async -> UNAuthorizationStatus {
+    nonisolated func authorizationStatus() async -> UNAuthorizationStatus {
         guard Bundle.main.bundleIdentifier != nil else { return .notDetermined }
-        let settings = await UNUserNotificationCenter.current().notificationSettings()
-        return settings.authorizationStatus
+        return await withCheckedContinuation { continuation in
+            UNUserNotificationCenter.current().getNotificationSettings { settings in
+                continuation.resume(returning: settings.authorizationStatus)
+            }
+        }
     }
 
     func post(title: String, body: String) {
