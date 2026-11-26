@@ -69,6 +69,7 @@ struct DiskPopoverView: View {
                         get: { diskManager.dontWriteUSBStores },
                         set: { diskManager.setDontWriteUSBStores($0) }
                     ))
+                    .toggleStyle(WenBarSwitchToggleStyle())
                     .font(.caption)
 
                     Spacer()

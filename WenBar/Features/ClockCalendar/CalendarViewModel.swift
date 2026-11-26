@@ -22,6 +22,20 @@ struct CalendarReminderItem: Identifiable, Sendable {
     let dueDate: Date?
 }
 
+struct CalendarEventItem: Identifiable, Sendable {
+    let id: String
+    let title: String
+    let isAllDay: Bool
+    let startDate: Date
+    let endDate: Date
+    let colorRed: Double
+    let colorGreen: Double
+    let colorBlue: Double
+    let colorAlpha: Double
+    let isReadOnlySubscription: Bool
+    let isSubscriptionType: Bool
+}
+
 @MainActor
 @Observable
 final class CalendarViewModel {
@@ -33,10 +47,10 @@ final class CalendarViewModel {
     var holidaySyncStatus: String = "内置离线数据"
 
     // EventKit & Selected Day Rich Info
-    var eventsForSelectedDate: [EKEvent] = []
+    var eventsForSelectedDate: [CalendarEventItem] = []
     var remindersForSelectedDate: [CalendarReminderItem] = []
     var upcomingReminders: [CalendarReminderItem] = []
-    var upcomingEvents: [EKEvent] = []
+    var upcomingEvents: [CalendarEventItem] = []
     var selectedDayHoliday: HolidayDay?
     var nextSolarTerm: NextSolarTermInfo?
     var calendarAccessGranted: Bool = false
@@ -63,10 +77,12 @@ final class CalendarViewModel {
         Task {
             await rebuildGrid()
             await refreshNextHoliday()
-            if settingsStore.settings.autoSyncHolidays {
+            await loadSelectedDateItems()
+        }
+        if settingsStore.settings.autoSyncHolidays {
+            Task {
                 await syncOnlineHolidays()
             }
-            await loadSelectedDateItems()
         }
     }
 
@@ -206,7 +222,7 @@ final class CalendarViewModel {
             return
         }
 
-        let eventDatesSet = fetchEventDaysInMonthRange(start: gridStart, count: 42)
+        let eventDatesSet = await fetchEventDaysInMonthRange(start: gridStart, count: 42)
         var days: [CalendarGridDay] = []
         days.reserveCapacity(42)
 
@@ -248,23 +264,26 @@ final class CalendarViewModel {
         nextSolarTerm = LunarCalendarEngine.nextSolarTerm(after: now)
 
         if calendarAccessGranted {
-            let predicate = eventStore.predicateForEvents(withStart: start, end: end, calendars: nil)
-            let rawEvents = eventStore.events(matching: predicate)
-                .sorted { $0.startDate < $1.startDate }
-            eventsForSelectedDate = filterAndDeduplicateEvents(rawEvents, for: selectedDate, holiday: selectedDayHoliday)
+            let futureEnd = gregorianCal.date(byAdding: .day, value: 60, to: now) ?? end
+            let queryStart = min(start, gregorianCal.startOfDay(for: now))
+            let queryEnd = max(end, futureEnd)
+            let rawAll = await fetchEventsOffMain(from: queryStart, to: queryEnd)
 
-            if let futureEnd = gregorianCal.date(byAdding: .day, value: 60, to: now) {
-                let todayStart = gregorianCal.startOfDay(for: now)
-                let upcomingPred = eventStore.predicateForEvents(withStart: todayStart, end: futureEnd, calendars: nil)
-                let rawUpcoming = eventStore.events(matching: upcomingPred)
-                    .sorted { $0.startDate < $1.startDate }
-                let dedupUpcoming = filterAndDeduplicateUpcomingEvents(rawUpcoming)
-                upcomingEvents = dedupUpcoming.filter { ev in
-                    if ev.isAllDay {
-                        return gregorianCal.startOfDay(for: ev.startDate) >= todayStart
-                    }
-                    return ev.endDate >= now
+            let rawForSelected = rawAll.filter { ev in
+                ev.endDate > start && ev.startDate < end
+            }
+            eventsForSelectedDate = filterAndDeduplicateEvents(rawForSelected, for: selectedDate, holiday: selectedDayHoliday)
+
+            let todayStart = gregorianCal.startOfDay(for: now)
+            let rawUpcoming = rawAll.filter { ev in
+                ev.endDate >= todayStart && ev.startDate <= futureEnd
+            }
+            let dedupUpcoming = filterAndDeduplicateUpcomingEvents(rawUpcoming)
+            upcomingEvents = dedupUpcoming.filter { ev in
+                if ev.isAllDay {
+                    return gregorianCal.startOfDay(for: ev.startDate) >= todayStart
                 }
+                return ev.endDate >= now
             }
         } else {
             eventsForSelectedDate = []
@@ -448,42 +467,70 @@ final class CalendarViewModel {
         return parts.joined(separator: " · ")
     }
 
-    private func fetchEventDaysInMonthRange(start: Date, count: Int) -> Set<String> {
+    private func fetchEventDaysInMonthRange(start: Date, count: Int) async -> Set<String> {
         guard calendarAccessGranted,
               let end = gregorianCal.date(byAdding: .day, value: count, to: start) else {
             return []
         }
-        let predicate = eventStore.predicateForEvents(withStart: start, end: end, calendars: nil)
-        let events = eventStore.events(matching: predicate)
+        let events = await fetchEventsOffMain(from: start, to: end)
         var keys = Set<String>()
         for ev in events {
             if isRedundantSubscribedHolidayEvent(ev) { continue }
-            if let s = ev.startDate {
-                keys.insert(HolidayRepository.dateKey(for: s))
-            }
+            keys.insert(HolidayRepository.dateKey(for: ev.startDate))
         }
         return keys
     }
 
-    private func isRedundantSubscribedHolidayEvent(_ event: EKEvent) -> Bool {
-        let isReadOnlySubscription = !event.calendar.allowsContentModifications || event.calendar.type == .subscription
-        guard isReadOnlySubscription && event.isAllDay else { return false }
+    private nonisolated func fetchEventsOffMain(from start: Date, to end: Date) async -> [CalendarEventItem] {
+        await Task.detached { [eventStore] in
+            let predicate = eventStore.predicateForEvents(withStart: start, end: end, calendars: nil)
+            return eventStore.events(matching: predicate)
+                .sorted { $0.startDate < $1.startDate }
+                .map { ev in
+                    let rgba = Self.extractRGBAComponents(from: ev.calendar.cgColor)
+                    return CalendarEventItem(
+                        id: ev.eventIdentifier ?? UUID().uuidString,
+                        title: ev.title ?? "(无标题)",
+                        isAllDay: ev.isAllDay,
+                        startDate: ev.startDate,
+                        endDate: ev.endDate,
+                        colorRed: rgba.r,
+                        colorGreen: rgba.g,
+                        colorBlue: rgba.b,
+                        colorAlpha: rgba.a,
+                        isReadOnlySubscription: !ev.calendar.allowsContentModifications || ev.calendar.type == .subscription,
+                        isSubscriptionType: ev.calendar.type == .subscription
+                    )
+                }
+        }.value
+    }
 
-        let title = (event.title ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+    private nonisolated static func extractRGBAComponents(from cgColor: CGColor?) -> (r: Double, g: Double, b: Double, a: Double) {
+        guard let cgColor,
+              let rgb = cgColor.converted(to: CGColorSpaceCreateDeviceRGB(), intent: .defaultIntent, options: nil),
+              let comps = rgb.components, comps.count >= 3 else {
+            return (0.2, 0.5, 1.0, 1.0)
+        }
+        let alpha = comps.count >= 4 ? comps[3] : 1.0
+        return (Double(comps[0]), Double(comps[1]), Double(comps[2]), Double(alpha))
+    }
+
+    private func isRedundantSubscribedHolidayEvent(_ event: CalendarEventItem) -> Bool {
+        guard event.isReadOnlySubscription && event.isAllDay else { return false }
+
+        let title = event.title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty else { return false }
 
         // Skip Apple/subscribed holiday & solar-term calendars whose entries WenBar already renders natively
-        if let start = event.startDate {
-            let lunar = LunarCalendarEngine.info(for: start)
-            var knownNames = [
-                lunar.solarTerm,
-                lunar.traditionalFestival,
-                lunar.gregorianFestival
-            ].compactMap { $0 }
-            knownNames.append(contentsOf: lunar.extraFestivals.flatMap { [$0.name, $0.shortName] })
-            if knownNames.contains(where: { title == $0 || title.contains($0) || $0.contains(title) }) {
-                return true
-            }
+        let lunar = LunarCalendarEngine.info(for: event.startDate)
+        var knownNames = [
+            lunar.solarTerm,
+            lunar.traditionalFestival,
+            lunar.gregorianFestival
+        ].compactMap { $0 }
+        knownNames.append(contentsOf: lunar.extraFestivals.flatMap { [$0.name, $0.shortName] })
+        if knownNames.contains(where: { title == $0 || title.contains($0) || $0.contains(title) }) {
+            return true
         }
 
         let solarTerms: Set<String> = [
@@ -495,22 +542,22 @@ final class CalendarViewModel {
         if solarTerms.contains(title) {
             return true
         }
-        if event.calendar.type == .subscription && (title.contains("假期") || title.contains("放假") || title.contains("上班") || title.contains("节")) {
+        if event.isSubscriptionType && (title.contains("假期") || title.contains("放假") || title.contains("上班") || title.contains("节")) {
             return true
         }
         return false
     }
 
-    private func filterAndDeduplicateEvents(_ events: [EKEvent], for date: Date, holiday: HolidayDay?) -> [EKEvent] {
+    private func filterAndDeduplicateEvents(_ events: [CalendarEventItem], for date: Date, holiday: HolidayDay?) -> [CalendarEventItem] {
         var seen = Set<String>()
-        var result: [EKEvent] = []
+        var result: [CalendarEventItem] = []
         for ev in events {
             if isRedundantSubscribedHolidayEvent(ev) { continue }
-            if let h = holiday, (!ev.calendar.allowsContentModifications || ev.calendar.type == .subscription) {
-                let t = (ev.title ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            if let h = holiday, ev.isReadOnlySubscription {
+                let t = ev.title.trimmingCharacters(in: .whitespacesAndNewlines)
                 if t.contains(h.name) { continue }
             }
-            let key = "\(ev.title ?? "")|\(ev.isAllDay)|\(ev.startDate?.timeIntervalSince1970 ?? 0)|\(ev.endDate?.timeIntervalSince1970 ?? 0)"
+            let key = "\(ev.title)|\(ev.isAllDay)|\(ev.startDate.timeIntervalSince1970)|\(ev.endDate.timeIntervalSince1970)"
             if seen.insert(key).inserted {
                 result.append(ev)
             }
@@ -518,12 +565,12 @@ final class CalendarViewModel {
         return result
     }
 
-    private func filterAndDeduplicateUpcomingEvents(_ events: [EKEvent]) -> [EKEvent] {
+    private func filterAndDeduplicateUpcomingEvents(_ events: [CalendarEventItem]) -> [CalendarEventItem] {
         var seen = Set<String>()
-        var result: [EKEvent] = []
+        var result: [CalendarEventItem] = []
         for ev in events {
             if isRedundantSubscribedHolidayEvent(ev) { continue }
-            let key = "\(ev.title ?? "")|\(ev.isAllDay)|\(ev.startDate?.timeIntervalSince1970 ?? 0)"
+            let key = "\(ev.title)|\(ev.isAllDay)|\(ev.startDate.timeIntervalSince1970)"
             if seen.insert(key).inserted {
                 result.append(ev)
             }

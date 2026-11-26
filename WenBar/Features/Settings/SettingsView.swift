@@ -2,6 +2,35 @@ import SwiftUI
 import Carbon.HIToolbox
 import WenBarCore
 
+struct WenBarSwitchToggleStyle: ToggleStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        HStack {
+            configuration.label
+            Spacer()
+            Button {
+                withAnimation(.spring(response: 0.22, dampingFraction: 0.8)) {
+                    configuration.isOn.toggle()
+                }
+            } label: {
+                ZStack(alignment: configuration.isOn ? .trailing : .leading) {
+                    Capsule(style: .continuous)
+                        .fill(configuration.isOn ? Color.accentColor : Color.secondary.opacity(0.32))
+                        .frame(width: 36, height: 20)
+
+                    Circle()
+                        .fill(Color.white)
+                        .frame(width: 16, height: 16)
+                        .shadow(color: .black.opacity(0.18), radius: 1.5, x: 0, y: 0.5)
+                        .padding(2)
+                }
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(Text("切换开关"))
+            .accessibilityValue(Text(configuration.isOn ? "开启" : "关闭"))
+        }
+    }
+}
+
 struct SettingsView: View {
     @Bindable var settingsStore: SettingsStore
     @Bindable var clockVM: ClockViewModel
@@ -14,6 +43,7 @@ struct SettingsView: View {
 
     @State private var draftTemplateName: String = ""
     @State private var editingCustomTemplateID: String?
+    @State private var showingFullReleaseNotes = false
 
     var body: some View {
         TabView {
@@ -37,8 +67,17 @@ struct SettingsView: View {
                     Label("压缩与解压", systemImage: "archivebox")
                 }
         }
+        .toggleStyle(WenBarSwitchToggleStyle())
         .padding(16)
-        .frame(width: 600, height: 540)
+        .frame(minWidth: 580, minHeight: 520)
+        .sheet(isPresented: $showingFullReleaseNotes) {
+            if let release = updateService.availableRelease {
+                ReleaseNotesSheet(release: release) {
+                    showingFullReleaseNotes = false
+                    Task { await updateService.downloadAndInstall() }
+                }
+            }
+        }
     }
 
     private var generalTab: some View {
@@ -160,13 +199,30 @@ struct SettingsView: View {
                 }
 
                 if let release = updateService.availableRelease, !release.body.isEmpty {
-                    Text(release.body)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(4)
-                        .padding(8)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 6))
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Text("更新说明（\(release.tagName)）")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            Button("完整查看") {
+                                showingFullReleaseNotes = true
+                            }
+                            .controlSize(.mini)
+                            .buttonStyle(.bordered)
+                        }
+
+                        ScrollView {
+                            Text(release.body)
+                                .font(.caption)
+                                .foregroundStyle(.primary)
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(8)
+                        }
+                        .frame(minHeight: 130, maxHeight: 210)
+                        .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 8))
+                    }
                 }
             }
         }
@@ -602,5 +658,56 @@ private struct HotkeyRecorderButton: View {
             NSEvent.removeMonitor(monitor)
             self.monitor = nil
         }
+    }
+}
+
+private struct ReleaseNotesSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    let release: GitHubRelease
+    let onInstall: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Image("WenBarLogo")
+                    .resizable()
+                    .interpolation(.high)
+                    .frame(width: 32, height: 32)
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(release.name.isEmpty ? "WenBar \(release.tagName)" : release.name)
+                        .font(.headline)
+                    Text("版本标签：\(release.tagName)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+
+            Divider()
+
+            ScrollView {
+                Text(release.body)
+                    .font(.body)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(4)
+            }
+            .frame(minHeight: 260, maxHeight: 380)
+
+            HStack {
+                Button("在 GitHub 打开") {
+                    NSWorkspace.shared.open(release.htmlURL)
+                }
+                Spacer()
+                Button("关闭") { dismiss() }
+                Button("下载并安装重启") {
+                    onInstall()
+                }
+                .buttonStyle(.borderedProminent)
+            }
+        }
+        .padding(18)
+        .frame(width: 520)
     }
 }

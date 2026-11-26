@@ -17,6 +17,7 @@ final class FloatingPanelController: NSObject {
     private var globalMouseMonitor: Any?
     private var localKeyMonitor: Any?
     private var resignObserver: NSObjectProtocol?
+    private var lastOpenedAt: Date = .distantPast
 
     private let horizontalEdgeMargin: CGFloat = 14
     private let verticalBarGap: CGFloat = 8
@@ -58,6 +59,7 @@ final class FloatingPanelController: NSObject {
 
     func show(relativeTo button: NSStatusBarButton) {
         anchorButton = button
+        lastOpenedAt = Date()
         positionPanel(relativeTo: button)
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)
@@ -100,6 +102,9 @@ final class FloatingPanelController: NSObject {
         globalMouseMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
             Task { @MainActor in
                 guard let self, self.panel.isVisible, self.panel.attachedSheet == nil else { return }
+                if Date().timeIntervalSince(self.lastOpenedAt) < 0.15 {
+                    return
+                }
                 let mouseLoc = NSEvent.mouseLocation
                 if let btn = self.anchorButton, let btnWin = btn.window {
                     let btnScreenRect = btnWin.convertToScreen(btn.convert(btn.bounds, to: nil))
@@ -172,6 +177,8 @@ final class StatusBarController: NSObject {
     private let onQuit: () -> Void
 
     private var displayLinkTimer: Timer?
+    private var lastClockRenderSignature: String = ""
+    private var lastDiskBadgeCount: Int?
 
     init(
         clockVM: ClockViewModel,
@@ -206,11 +213,12 @@ final class StatusBarController: NSObject {
             if let button = item.button {
                 button.target = self
                 button.action = #selector(handleClockButtonClick(_:))
-                button.sendAction(on: [.leftMouseUp, .rightMouseUp])
+                button.sendAction(on: [.leftMouseDown, .rightMouseDown])
             }
             clockStatusItem = item
         }
 
+        lastClockRenderSignature = ""
         updateClockButtonTitle()
         updateStandaloneDiskItem()
     }
@@ -221,6 +229,7 @@ final class StatusBarController: NSObject {
             && !diskManager.externalVolumes.isEmpty
 
         if shouldShow {
+            let count = diskManager.externalVolumes.count
             if diskStatusItem == nil {
                 let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
                 if let button = item.button {
@@ -230,12 +239,17 @@ final class StatusBarController: NSObject {
                     )
                     button.target = self
                     button.action = #selector(handleDiskButtonClick(_:))
-                    button.sendAction(on: [.leftMouseUp, .rightMouseUp])
+                    button.sendAction(on: [.leftMouseDown, .rightMouseDown])
                 }
                 diskStatusItem = item
+                lastDiskBadgeCount = nil
             }
-            diskStatusItem?.button?.title = " \(diskManager.externalVolumes.count)"
+            if lastDiskBadgeCount != count {
+                lastDiskBadgeCount = count
+                diskStatusItem?.button?.title = " \(count)"
+            }
         } else {
+            lastDiskBadgeCount = nil
             if let existing = diskStatusItem {
                 NSStatusBar.system.removeStatusItem(existing)
                 diskStatusItem = nil
@@ -306,6 +320,10 @@ final class StatusBarController: NSObject {
             text += " 📦\(pct)"
         }
 
+        let signature = "\(text)|\(settings.clockShowCalendarIcon)|\(settings.clockFontSize)|\(settings.clockFontWeight.rawValue)|\(settings.clockUseMonospacedDigits)"
+        guard signature != lastClockRenderSignature else { return }
+        lastClockRenderSignature = signature
+
         if settings.clockShowCalendarIcon {
             let icon = NSImage(systemSymbolName: "calendar", accessibilityDescription: "WenBar")
             icon?.isTemplate = true
@@ -347,7 +365,7 @@ final class StatusBarController: NSObject {
     }
 
     @objc private func handleClockButtonClick(_ sender: NSStatusBarButton) {
-        if NSApp.currentEvent?.type == .rightMouseUp {
+        if NSApp.currentEvent?.type == .rightMouseDown {
             showContextMenu(from: sender)
         } else {
             toggleMainPopover()
@@ -355,7 +373,7 @@ final class StatusBarController: NSObject {
     }
 
     @objc private func handleDiskButtonClick(_ sender: NSStatusBarButton) {
-        if NSApp.currentEvent?.type == .rightMouseUp {
+        if NSApp.currentEvent?.type == .rightMouseDown {
             showContextMenu(from: sender)
         } else if diskPanel.isShown {
             diskPanel.close()

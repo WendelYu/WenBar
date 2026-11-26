@@ -89,8 +89,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func openSettingsWindow() {
         if let settingsWindow {
-            settingsWindow.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
+            settingsWindow.makeKeyAndOrderFront(nil)
             return
         }
 
@@ -109,19 +109,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
 
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 600, height: 540),
-            styleMask: [.titled, .closable],
+            contentRect: NSRect(x: 0, y: 0, width: 620, height: 600),
+            styleMask: [.titled, .closable, .resizable],
             backing: .buffered,
             defer: false
         )
         window.title = "WenBar 设置"
+        window.minSize = NSSize(width: 580, height: 520)
         window.center()
         window.isReleasedWhenClosed = false
         window.contentViewController = NSHostingController(rootView: view)
         self.settingsWindow = window
 
-        window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
     }
 
     func openOnboardingWindow() {

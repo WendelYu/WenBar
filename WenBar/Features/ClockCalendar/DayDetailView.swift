@@ -108,12 +108,9 @@ struct DayDetailView: View {
             .filter { !selectedRemIDs.contains($0.id) }
             .prefix(3)
 
-        let selectedEventIDs = Set(calendarVM.eventsForSelectedDate.compactMap(\.eventIdentifier))
+        let selectedEventIDs = Set(calendarVM.eventsForSelectedDate.map(\.id))
         let extraUpcomingEvents = calendarVM.upcomingEvents
-            .filter { ev in
-                guard let id = ev.eventIdentifier else { return true }
-                return !selectedEventIDs.contains(id)
-            }
+            .filter { !selectedEventIDs.contains($0.id) }
             .prefix(2)
 
         return VStack(alignment: .leading, spacing: 0) {
@@ -158,7 +155,7 @@ struct DayDetailView: View {
             }
 
             // 3. Selected day's deduplicated user events
-            ForEach(calendarVM.eventsForSelectedDate, id: \.eventIdentifier) { event in
+            ForEach(calendarVM.eventsForSelectedDate) { event in
                 eventRow(event, now: now)
                 Divider().opacity(0.45)
             }
@@ -170,7 +167,7 @@ struct DayDetailView: View {
             }
 
             // 5. Upcoming events
-            ForEach(Array(extraUpcomingEvents), id: \.eventIdentifier) { event in
+            ForEach(Array(extraUpcomingEvents)) { event in
                 eventRow(event, now: now, tagPrefix: "日程")
                 Divider().opacity(0.45)
             }
@@ -359,15 +356,15 @@ struct DayDetailView: View {
         .buttonStyle(.plain)
     }
 
-    private func eventRow(_ event: EKEvent, now: Date, tagPrefix: String? = nil) -> some View {
-        let start = event.startDate ?? now
+    private func eventRow(_ event: CalendarEventItem, now: Date, tagPrefix: String? = nil) -> some View {
+        let start = event.startDate
         let countdown = CountdownFormatter.describe(from: now, to: start, isAllDay: event.isAllDay)
         let timeStr = event.isAllDay ? "\(monthDayAndWeekday(start)) · 全天" : dateAndTimeText(start)
         let subtitle = tagPrefix != nil ? "\(tagPrefix!) · \(timeStr)" : timeStr
 
         return countdownRow(
-            accentColor: Color(cgColor: event.calendar.cgColor),
-            title: event.title ?? "(无标题)",
+            accentColor: Color(.sRGB, red: event.colorRed, green: event.colorGreen, blue: event.colorBlue, opacity: event.colorAlpha),
+            title: event.title,
             subtitle: subtitle,
             rightNumber: countdown.number,
             rightUnit: countdown.unit,
