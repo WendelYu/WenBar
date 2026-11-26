@@ -60,10 +60,14 @@
 
 ### 首次安装（拖入一次即可）
 1. 前往 [**GitHub Releases**](https://github.com/WendelYu/WenBar/releases/latest) 下载最新的 `WenBar-x.x.x.dmg`。
-2. 打开 DMG，将 `WenBar.app` 拖入右侧 `Applications（应用程序）` 文件夹。
-3. 首次打开若 macOS 提示“无法验证开发者”：
-   - 前往 **系统设置 → 隐私与安全性**，在底部点击 **仍要打开**（或执行一次 `xattr -dr com.apple.quarantine /Applications/WenBar.app`）。
-4. 根据首次启动引导页启用 **Finder 扩展**、日历/提醒事项与通知权限即可使用。
+2. 打开 DMG，将 `WenBar.app` 拖入右侧 `Applications（应用程序）` 文件夹（请务必拖入后再运行，否则无法自动更新）。
+3. 首次打开若 macOS 提示“无法验证开发者”或“已损坏”，在终端运行一次以下命令（也可前往「系统设置 → 隐私与安全性」点击「仍要打开」）：
+
+```bash
+xattr -dr com.apple.quarantine "/Applications/WenBar.app"
+```
+
+4. 根据首次启动引导页启用 **Finder 扩展**（系统设置 → 登录项与扩展 → Finder 扩展 → 勾选 **WenBarFinderSync**）、日历/提醒事项与通知权限即可使用。
 
 ### 软件内自动更新（告别手动重装与隔离属性）
 拖入 `/Applications` 完成初次安装后，**后续版本更新全程自动**：

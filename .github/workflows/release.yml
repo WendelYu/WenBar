@@ -35,3 +35,15 @@ jobs:
             dist/WenBar-*.dmg
             dist/WenBar-*.zip
           generate_release_notes: true
+          body: |
+            ### 📦 安装与首次打开必读
+
+            1. 下载下方 **`WenBar-*.dmg`**，打开后将 **`WenBar.app`** 拖入 **`Applications（应用程序）`** 文件夹（不要直接在 DMG 内运行，否则无法自动更新）。
+            2. 由于开源构建未购买 Apple 付费公证签名，首次打开若提示“已损坏”或“无法验证开发者”，在终端执行一次以下命令即可正常打开（点击代码块右上角可直接复制）：
+
+            ```bash
+            xattr -dr com.apple.quarantine "/Applications/WenBar.app"
+            ```
+
+            3. 首次启动请按引导页提示开启 **Finder 扩展**（系统设置 → 登录项与扩展 → Finder 扩展 → 勾选 **WenBarFinderSync**）及日历/提醒事项/通知权限。
+            4. **后续更新免折腾**：安装到 `/Applications` 后，以后每次发布新版本直接在软件内点击 **「检查更新 → 下载并安装重启」** 即可自动更新并清除隔离属性，无需再次手动下载或敲命令。
