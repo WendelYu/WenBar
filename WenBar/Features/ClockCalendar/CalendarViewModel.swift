@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 import EventKit
 import WenBarCore
 
@@ -69,6 +70,7 @@ private final class EventStoreBox: @unchecked Sendable {
 final class CalendarViewModel {
     var displayedMonth: Date = Date()
     var selectedDate: Date = Date()
+    var currentDayReference: Date = Date()
     var gridDays: [CalendarGridDay] = []
     var nextHoliday: NextHolidayCountdown?
     var isSyncingHolidays: Bool = false
@@ -79,16 +81,20 @@ final class CalendarViewModel {
     var remindersForSelectedDate: [CalendarReminderItem] = []
     var upcomingReminders: [CalendarReminderItem] = []
     var upcomingEvents: [CalendarEventItem] = []
+    var customRemindersForSelectedDate: [ReminderOccurrence] = []
+    var upcomingCustomReminders: [ReminderOccurrence] = []
     var selectedDayHoliday: HolidayDay?
     var nextSolarTerm: NextSolarTermInfo?
     var calendarAccessGranted: Bool = false
     var remindersAccessGranted: Bool = false
     var availableWritableCalendars: [EKCalendar] = []
 
+    let customReminderStore = CustomReminderStore()
     private let eventStoreBox = EventStoreBox()
     private var eventStore: EKEventStore { eventStoreBox.store }
     private let holidayRepo: HolidayRepository
     private let settingsStore: SettingsStore
+    private var lifecycleObservers: [NSObjectProtocol] = []
 
     private let gregorianCal: Calendar = {
         var cal = Calendar(identifier: .gregorian)
@@ -103,6 +109,9 @@ final class CalendarViewModel {
         self.holidayRepo = HolidayRepository(fallbackJSONData: fallbackData)
 
         refreshAuthorizationStatus(loadCalendars: false)
+        refreshCustomReminders()
+        observeDayAndWakeChanges()
+        resyncCustomReminderNotifications()
         Task {
             await refreshWritableCalendarsOffMain()
             await rebuildGrid()
@@ -113,6 +122,42 @@ final class CalendarViewModel {
             Task {
                 await syncOnlineHolidays()
             }
+        }
+    }
+
+    private func observeDayAndWakeChanges() {
+        let dayObs = NotificationCenter.default.addObserver(
+            forName: .NSCalendarDayChanged,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.refreshForPanelOpen()
+            }
+        }
+        let wakeObs = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.refreshForPanelOpen()
+            }
+        }
+        lifecycleObservers = [dayObs, wakeObs]
+    }
+
+    func refreshForPanelOpen() {
+        let now = Date()
+        currentDayReference = now
+        displayedMonth = now
+        selectedDate = now
+        refreshCustomReminders()
+        resyncCustomReminderNotifications()
+        Task {
+            await rebuildGrid()
+            await refreshNextHoliday()
+            await loadSelectedDateItems()
         }
     }
 
@@ -269,12 +314,14 @@ final class CalendarViewModel {
         }
 
         let eventDatesSet = await fetchEventDaysInMonthRange(start: gridStart, count: 42)
+        let customDatesSet = customReminderDateKeysInRange(start: gridStart, count: 42)
         var days: [CalendarGridDay] = []
         days.reserveCapacity(42)
 
         for idx in 0..<42 {
             guard let date = gregorianCal.date(byAdding: .day, value: idx, to: gridStart) else { continue }
             let key = HolidayRepository.dateKey(for: date)
+            let localKey = CustomReminderEngine.dateKey(for: date)
             let holiday = await holidayRepo.holiday(forKey: key)
             let lunar = LunarCalendarEngine.info(for: date)
             let subtitle = LunarCalendarEngine.cellSubtitle(for: date, holiday: holiday)
@@ -291,7 +338,7 @@ final class CalendarViewModel {
                     subtitle: subtitle,
                     holiday: holiday,
                     lunarInfo: lunar,
-                    hasEvents: eventDatesSet.contains(key)
+                    hasEvents: eventDatesSet.contains(key) || customDatesSet.contains(localKey)
                 )
             )
         }
@@ -302,6 +349,8 @@ final class CalendarViewModel {
     func loadSelectedDateItems() async {
         refreshAuthorizationStatus()
         let now = Date()
+        currentDayReference = now
+        refreshCustomReminders()
         let start = gregorianCal.startOfDay(for: selectedDate)
         guard let end = gregorianCal.date(byAdding: .day, value: 1, to: start) else { return }
 
@@ -440,6 +489,81 @@ final class CalendarViewModel {
         await loadSelectedDateItems()
     }
 
+    // MARK: - Custom WenBar Reminders (Gregorian / Lunar / Multi-Alert)
+
+    func refreshCustomReminders() {
+        let now = Date()
+        let selectedDayStart = gregorianCal.startOfDay(for: selectedDate)
+        customRemindersForSelectedDate = customReminderStore.reminders
+            .flatMap { CustomReminderEngine.occurrences(of: $0, from: selectedDayStart, to: selectedDayStart) }
+            .sorted { $0.targetDate < $1.targetDate }
+
+        upcomingCustomReminders = customReminderStore.reminders
+            .compactMap { CustomReminderEngine.nextOccurrence(of: $0, after: now) }
+            .sorted { $0.targetDate < $1.targetDate }
+    }
+
+    func saveCustomReminder(_ reminder: CustomReminder, alsoSyncToSystemReminders: Bool = false) async {
+        customReminderStore.update(reminder)
+        _ = await NotificationService.shared.requestAuthorizationIfNeeded()
+        resyncCustomReminderNotifications()
+
+        if alsoSyncToSystemReminders, remindersAccessGranted,
+           let nextOcc = CustomReminderEngine.nextOccurrence(of: reminder, after: Date()) {
+            let sysReminder = EKReminder(eventStore: eventStore)
+            sysReminder.title = reminder.title
+            sysReminder.calendar = eventStore.defaultCalendarForNewReminders()
+            sysReminder.dueDateComponents = gregorianCal.dateComponents([.year, .month, .day, .hour, .minute], from: nextOcc.targetDate)
+            if !reminder.notes.isEmpty {
+                sysReminder.notes = reminder.notes
+            }
+            try? eventStore.save(sysReminder, commit: true)
+        }
+
+        refreshCustomReminders()
+        await rebuildGrid()
+        await loadSelectedDateItems()
+    }
+
+    func deleteCustomReminder(id: UUID) async {
+        customReminderStore.delete(id: id)
+        resyncCustomReminderNotifications()
+        refreshCustomReminders()
+        await rebuildGrid()
+        await loadSelectedDateItems()
+    }
+
+    func toggleCustomReminderOccurrence(_ occurrence: ReminderOccurrence) async {
+        customReminderStore.toggleCompletion(
+            reminderID: occurrence.reminder.id,
+            occurrenceDateKey: occurrence.dateKey
+        )
+        resyncCustomReminderNotifications()
+        refreshCustomReminders()
+        await rebuildGrid()
+    }
+
+    func resyncCustomReminderNotifications() {
+        let alerts = CustomReminderEngine.plannedNotifications(
+            for: customReminderStore.reminders,
+            from: Date()
+        )
+        NotificationService.shared.syncScheduledReminderAlerts(alerts)
+    }
+
+    private func customReminderDateKeysInRange(start: Date, count: Int) -> Set<String> {
+        guard let end = gregorianCal.date(byAdding: .day, value: max(0, count - 1), to: start) else {
+            return []
+        }
+        var keys = Set<String>()
+        for rem in customReminderStore.reminders {
+            for occ in CustomReminderEngine.occurrences(of: rem, from: start, to: end) {
+                keys.insert(occ.dateKey)
+            }
+        }
+        return keys
+    }
+
     var selectedDayLunar: LunarDateInfo {
         LunarCalendarEngine.info(for: selectedDate)
     }
@@ -449,7 +573,7 @@ final class CalendarViewModel {
     }
 
     var selectedDayRelativeDescription: String {
-        let today = gregorianCal.startOfDay(for: Date())
+        let today = gregorianCal.startOfDay(for: currentDayReference)
         let target = gregorianCal.startOfDay(for: selectedDate)
         let days = gregorianCal.dateComponents([.day], from: today, to: target).day ?? 0
         let week = gregorianCal.component(.weekOfYear, from: selectedDate)

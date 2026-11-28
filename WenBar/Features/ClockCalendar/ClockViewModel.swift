@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 import Combine
 import WenBarCore
 
@@ -23,6 +24,7 @@ final class ClockViewModel {
     var configuredCountdownMinutes: Int = 10
 
     private var timer: Timer?
+    private var lifecycleObservers: [NSObjectProtocol] = []
     private let settingsStore: SettingsStore
     var nextHolidayProvider: (() -> NextHolidayCountdown?)?
 
@@ -31,11 +33,35 @@ final class ClockViewModel {
         self.nextHolidayProvider = nextHolidayProvider
         updateDisplay()
         scheduleNextTick()
+        observeDayAndWakeChanges()
     }
 
     func refreshScheduling() {
+        currentDate = Date()
         updateDisplay()
         scheduleNextTick()
+    }
+
+    private func observeDayAndWakeChanges() {
+        let dayObs = NotificationCenter.default.addObserver(
+            forName: .NSCalendarDayChanged,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.refreshScheduling()
+            }
+        }
+        let wakeObs = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.refreshScheduling()
+            }
+        }
+        lifecycleObservers = [dayObs, wakeObs]
     }
 
     func startPomodoroFocus(minutes: Int = 25) {

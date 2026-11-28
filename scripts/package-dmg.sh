@@ -11,6 +11,7 @@ VERSION="${1:-${VERSION:-1.0.0}}"
 BUILD_NUMBER="${BUILD_NUMBER:-1}"
 DEVELOPER_ID="${DEVELOPER_ID:--}"
 TEAM_ID="${TEAM_ID:-}"
+KEYCHAIN_PATH="${KEYCHAIN_PATH:-}"
 
 DIST_DIR="$ROOT_DIR/dist"
 DERIVED_DATA="$ROOT_DIR/build/PackageDerivedData"
@@ -25,11 +26,23 @@ xcodegen generate
 rm -rf "$DIST_DIR"
 mkdir -p "$STAGING_DIR"
 
+IS_APPLE_DEV_ID=0
+if [[ "$DEVELOPER_ID" == Developer\ ID\ Application:* ]]; then
+  IS_APPLE_DEV_ID=1
+fi
+
 SIGN_EXTRA=()
 if [ "$DEVELOPER_ID" = "-" ]; then
   SIGN_EXTRA+=(AD_HOC_CODE_SIGNING_ALLOWED=YES ENABLE_HARDENED_RUNTIME=NO)
-else
+elif [ "$IS_APPLE_DEV_ID" -eq 1 ]; then
   SIGN_EXTRA+=(ENABLE_HARDENED_RUNTIME=YES)
+else
+  # Persistent self-signed Code Signing identity keeps a fixed Designated Requirement across updates
+  SIGN_EXTRA+=(ENABLE_HARDENED_RUNTIME=NO)
+fi
+
+if [ -n "$KEYCHAIN_PATH" ]; then
+  SIGN_EXTRA+=(OTHER_CODE_SIGN_FLAGS="--keychain $KEYCHAIN_PATH")
 fi
 
 xcodebuild \
@@ -49,15 +62,24 @@ APP_PATH="$STAGING_DIR/WenBar.app"
 ditto "$DERIVED_DATA/Build/Products/Release/WenBar.app" "$APP_PATH"
 
 if [ "$DEVELOPER_ID" != "-" ]; then
-  echo "Applying Developer ID Hardened Runtime signature inside-out..."
-  codesign --force --options runtime --timestamp --sign "$DEVELOPER_ID" "$APP_PATH/Contents/Resources/bin/7zz"
-  codesign --force --options runtime --timestamp \
+  CODESIGN_ARGS=(--force --sign "$DEVELOPER_ID")
+  if [ -n "$KEYCHAIN_PATH" ]; then
+    CODESIGN_ARGS+=(--keychain "$KEYCHAIN_PATH")
+  fi
+  if [ "$IS_APPLE_DEV_ID" -eq 1 ]; then
+    echo "Applying Developer ID Hardened Runtime signature inside-out..."
+    CODESIGN_ARGS+=(--options runtime --timestamp)
+  else
+    echo "Applying persistent Code Signing certificate inside-out..."
+    CODESIGN_ARGS+=(--timestamp=none)
+  fi
+
+  codesign "${CODESIGN_ARGS[@]}" "$APP_PATH/Contents/Resources/bin/7zz"
+  codesign "${CODESIGN_ARGS[@]}" \
     --entitlements "$ROOT_DIR/WenBarFinderSync/WenBarFinderSync.entitlements" \
-    --sign "$DEVELOPER_ID" \
     "$APP_PATH/Contents/PlugIns/WenBarFinderSync.appex"
-  codesign --force --options runtime --timestamp \
+  codesign "${CODESIGN_ARGS[@]}" \
     --entitlements "$ROOT_DIR/WenBar/WenBar.entitlements" \
-    --sign "$DEVELOPER_ID" \
     "$APP_PATH"
 fi
 

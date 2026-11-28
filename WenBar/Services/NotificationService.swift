@@ -1,5 +1,6 @@
 import Foundation
 import UserNotifications
+import WenBarCore
 
 @MainActor
 final class NotificationService {
@@ -38,5 +39,38 @@ final class NotificationService {
             trigger: nil
         )
         UNUserNotificationCenter.current().add(request)
+    }
+
+    nonisolated func syncScheduledReminderAlerts(_ alerts: [ScheduledReminderAlert]) {
+        guard Bundle.main.bundleIdentifier != nil else { return }
+        let prefix = ScheduledReminderAlert.identifierPrefix
+        UNUserNotificationCenter.current().getPendingNotificationRequests { pending in
+            let existingIDs = pending
+                .map(\.identifier)
+                .filter { $0.hasPrefix(prefix) }
+            let center = UNUserNotificationCenter.current()
+            if !existingIDs.isEmpty {
+                center.removePendingNotificationRequests(withIdentifiers: existingIDs)
+            }
+
+            for alert in alerts {
+                let content = UNMutableNotificationContent()
+                content.title = alert.title
+                content.body = alert.body
+                content.sound = .default
+
+                var comps = DateComponents()
+                comps.year = alert.fireYear
+                comps.month = alert.fireMonth
+                comps.day = alert.fireDay
+                comps.hour = alert.fireHour
+                comps.minute = alert.fireMinute
+                comps.second = 0
+
+                let trigger = UNCalendarNotificationTrigger(dateMatching: comps, repeats: false)
+                let request = UNNotificationRequest(identifier: alert.id, content: content, trigger: trigger)
+                center.add(request)
+            }
+        }
     }
 }

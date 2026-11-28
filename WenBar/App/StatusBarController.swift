@@ -18,14 +18,16 @@ final class FloatingPanelController: NSObject {
     private var localKeyMonitor: Any?
     private var resignObserver: NSObjectProtocol?
     private var lastOpenedAt: Date = .distantPast
+    private let onWillShow: (() -> Void)?
 
     private let horizontalEdgeMargin: CGFloat = 14
     private let verticalBarGap: CGFloat = 8
 
     var isShown: Bool { panel.isVisible }
 
-    init<Content: View>(panelSize: NSSize, rootView: Content) {
+    init<Content: View>(panelSize: NSSize, onWillShow: (() -> Void)? = nil, rootView: Content) {
         self.panelSize = panelSize
+        self.onWillShow = onWillShow
         let wrapped = AnyView(
             rootView
                 .frame(width: panelSize.width, height: panelSize.height)
@@ -62,6 +64,7 @@ final class FloatingPanelController: NSObject {
     func show(relativeTo button: NSStatusBarButton) {
         anchorButton = button
         lastOpenedAt = Date()
+        onWillShow?()
         positionPanel(relativeTo: button)
         panel.orderFrontRegardless()
         panel.makeKeyAndOrderFront(nil)
@@ -278,6 +281,10 @@ final class StatusBarController: NSObject {
     private func configurePanels() {
         mainPanel = FloatingPanelController(
             panelSize: NSSize(width: 420, height: 640),
+            onWillShow: { [weak self] in
+                self?.calendarVM.refreshForPanelOpen()
+                self?.clockVM.refreshScheduling()
+            },
             rootView: MainPopoverView(
                 clockVM: clockVM,
                 calendarVM: calendarVM,
