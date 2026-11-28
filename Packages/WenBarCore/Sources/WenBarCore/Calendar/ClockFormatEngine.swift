@@ -82,6 +82,64 @@ public enum ClockFormatEngine {
 
     private static let cnWeekdays = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"]
     private static let cnFullWeekdays = ["星期日", "星期一", "星期二", "星期三", "星期四", "星期五", "星期六"]
+    private static let beijingTimeZone = TimeZone(identifier: "Asia/Shanghai") ?? .current
+
+    private final class EngineCache: @unchecked Sendable {
+        private let lock = NSLock()
+        private var formatters: [String: DateFormatter] = [:]
+        private var calendars: [String: Calendar] = [:]
+        private var lunarByBeijingDayKey: [Int: LunarDateInfo] = [:]
+
+        func calendar(for timeZone: TimeZone) -> Calendar {
+            lock.lock()
+            defer { lock.unlock() }
+            if let existing = calendars[timeZone.identifier] {
+                return existing
+            }
+            var cal = Calendar(identifier: .gregorian)
+            cal.timeZone = timeZone
+            if calendars.count >= 16 { calendars.removeAll() }
+            calendars[timeZone.identifier] = cal
+            return cal
+        }
+
+        func formatter(locale: Locale, timeZone: TimeZone, dateFormat: String) -> DateFormatter {
+            let key = "\(locale.identifier)|\(timeZone.identifier)|\(dateFormat)"
+            lock.lock()
+            defer { lock.unlock() }
+            if let existing = formatters[key] {
+                return existing
+            }
+            let df = DateFormatter()
+            df.locale = locale
+            df.timeZone = timeZone
+            df.dateFormat = dateFormat
+            if formatters.count >= 48 { formatters.removeAll() }
+            formatters[key] = df
+            return df
+        }
+
+        func lunarInfo(for date: Date) -> LunarDateInfo {
+            let cal = calendar(for: beijingTimeZone)
+            let comps = cal.dateComponents([.year, .month, .day], from: date)
+            let dayKey = (comps.year ?? 2026) * 10000 + (comps.month ?? 1) * 100 + (comps.day ?? 1)
+            lock.lock()
+            if let cached = lunarByBeijingDayKey[dayKey] {
+                lock.unlock()
+                return cached
+            }
+            lock.unlock()
+
+            let computed = LunarCalendarEngine.info(for: date)
+            lock.lock()
+            if lunarByBeijingDayKey.count >= 16 { lunarByBeijingDayKey.removeAll() }
+            lunarByBeijingDayKey[dayKey] = computed
+            lock.unlock()
+            return computed
+        }
+    }
+
+    private static let cache = EngineCache()
 
     /// Checks whether the template contains seconds tokens (`s` or `S`) outside literal quotes or `{...}` macros.
     public static func requiresPerSecondUpdates(template: String) -> Bool {
@@ -108,32 +166,67 @@ public enum ClockFormatEngine {
         timeZone: TimeZone = .current,
         nextHoliday: NextHolidayCountdown? = nil
     ) -> String {
-        var cal = Calendar(identifier: .gregorian)
-        cal.timeZone = timeZone
+        let cal = cache.calendar(for: timeZone)
 
-        let lunar = LunarCalendarEngine.info(for: date)
-        let weekOfYear = cal.component(.weekOfYear, from: date)
-        let weekdayIdx = cal.component(.weekday, from: date) - 1
+        let needsLunar = template.contains("{lunar")
+            || template.contains("{ganzhi}")
+            || template.contains("{zodiac}")
+            || template.contains("{jieqi}")
+            || template.contains("{festival}")
+
+        let lunarShort: String
+        let lunarMonthName: String
+        let lunarDayName: String
+        let lunarFull: String
+        let ganzhiText: String
+        let zodiacText: String
+        let jieqiText: String
+        let festivalText: String
+
+        if needsLunar {
+            let lunar = cache.lunarInfo(for: date)
+            lunarShort = lunar.lunarDay == 1 ? lunar.monthName : "\(lunar.monthName)\(lunar.dayName)"
+            lunarMonthName = lunar.monthName
+            lunarDayName = lunar.dayName
+            lunarFull = "\(lunar.yearGanZhi)\(lunar.monthName)\(lunar.dayName)"
+            ganzhiText = lunar.yearGanZhi
+            zodiacText = lunar.zodiac
+            jieqiText = lunar.solarTerm ?? ""
+            festivalText = lunar.traditionalFestival ?? lunar.gregorianFestival ?? ""
+        } else {
+            lunarShort = ""
+            lunarMonthName = ""
+            lunarDayName = ""
+            lunarFull = ""
+            ganzhiText = ""
+            zodiacText = ""
+            jieqiText = ""
+            festivalText = ""
+        }
+
+        let weekOfYear = template.contains("{week}") ? cal.component(.weekOfYear, from: date) : 0
+        let weekdayIdx = (template.contains("{weekday_cn}") || template.contains("{weekday_full}"))
+            ? (cal.component(.weekday, from: date) - 1)
+            : -1
         let weekdayCN = (weekdayIdx >= 0 && weekdayIdx < cnWeekdays.count) ? cnWeekdays[weekdayIdx] : ""
         let weekdayFull = (weekdayIdx >= 0 && weekdayIdx < cnFullWeekdays.count) ? cnFullWeekdays[weekdayIdx] : ""
 
-        let hour = cal.component(.hour, from: date)
         let ampmText: String
-        switch hour {
-        case 0..<6: ampmText = "凌晨"
-        case 6..<12: ampmText = "上午"
-        case 12: ampmText = "中午"
-        case 13..<18: ampmText = "下午"
-        default: ampmText = "晚上"
+        if template.contains("{ampm}") {
+            let hour = cal.component(.hour, from: date)
+            switch hour {
+            case 0..<6: ampmText = "凌晨"
+            case 6..<12: ampmText = "上午"
+            case 12: ampmText = "中午"
+            case 13..<18: ampmText = "下午"
+            default: ampmText = "晚上"
+            }
+        } else {
+            ampmText = ""
         }
 
-        let lunarShort = lunar.lunarDay == 1 ? lunar.monthName : "\(lunar.monthName)\(lunar.dayName)"
-        let lunarFull = "\(lunar.yearGanZhi)\(lunar.monthName)\(lunar.dayName)"
-        let jieqiText = lunar.solarTerm ?? ""
-        let festivalText = lunar.traditionalFestival ?? lunar.gregorianFestival ?? ""
-
         let holidayCDText: String
-        if let nextHoliday {
+        if template.contains("{holiday_cd}"), let nextHoliday {
             holidayCDText = nextHoliday.isOngoing ? "\(nextHoliday.name)中" : "距\(nextHoliday.name)\(nextHoliday.daysRemaining)天"
         } else {
             holidayCDText = ""
@@ -142,18 +235,14 @@ public enum ClockFormatEngine {
         let normalizedTemplate = template.replacingOccurrences(of: "\\n", with: "\n")
         let rawLines = normalizedTemplate.components(separatedBy: "\n")
 
-        let df = DateFormatter()
-        df.locale = locale
-        df.timeZone = timeZone
-
         let formattedLines = rawLines.map { line -> String in
             let resolved = line
                 .replacingOccurrences(of: "{lunar}", with: quoteLiteral(lunarShort))
-                .replacingOccurrences(of: "{lunar_month}", with: quoteLiteral(lunar.monthName))
-                .replacingOccurrences(of: "{lunar_day}", with: quoteLiteral(lunar.dayName))
+                .replacingOccurrences(of: "{lunar_month}", with: quoteLiteral(lunarMonthName))
+                .replacingOccurrences(of: "{lunar_day}", with: quoteLiteral(lunarDayName))
                 .replacingOccurrences(of: "{lunar_full}", with: quoteLiteral(lunarFull))
-                .replacingOccurrences(of: "{ganzhi}", with: quoteLiteral(lunar.yearGanZhi))
-                .replacingOccurrences(of: "{zodiac}", with: quoteLiteral(lunar.zodiac))
+                .replacingOccurrences(of: "{ganzhi}", with: quoteLiteral(ganzhiText))
+                .replacingOccurrences(of: "{zodiac}", with: quoteLiteral(zodiacText))
                 .replacingOccurrences(of: "{jieqi}", with: quoteLiteral(jieqiText))
                 .replacingOccurrences(of: "{festival}", with: quoteLiteral(festivalText))
                 .replacingOccurrences(of: "{week}", with: quoteLiteral("\(weekOfYear)"))
@@ -162,7 +251,7 @@ public enum ClockFormatEngine {
                 .replacingOccurrences(of: "{ampm}", with: quoteLiteral(ampmText))
                 .replacingOccurrences(of: "{holiday_cd}", with: quoteLiteral(holidayCDText))
 
-            df.dateFormat = resolved
+            let df = cache.formatter(locale: locale, timeZone: timeZone, dateFormat: resolved)
             var output = df.string(from: date)
             while output.contains("  ") {
                 output = output.replacingOccurrences(of: "  ", with: " ")

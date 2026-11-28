@@ -24,6 +24,7 @@ final class ExternalDriveManager {
 
     private let settingsStore: SettingsStore
     private var observers: [NSObjectProtocol] = []
+    @ObservationIgnored var onVolumesChanged: (() -> Void)?
 
     init(settingsStore: SettingsStore) {
         self.settingsStore = settingsStore
@@ -90,6 +91,7 @@ final class ExternalDriveManager {
         }
 
         externalVolumes = found.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        onVolumesChanged?()
     }
 
     func hasMetadataNeverIndex(for volume: VolumeDescriptor) -> Bool {
@@ -268,18 +270,20 @@ final class ExternalDriveManager {
         process.standardOutput = pipe
         process.standardError = Pipe()
 
+        let semaphore = DispatchSemaphore(value: 0)
+        process.terminationHandler = { _ in
+            semaphore.signal()
+        }
+
         do {
             try process.run()
         } catch {
             return []
         }
 
-        let deadline = Date().addingTimeInterval(4.0)
-        while process.isRunning && Date() < deadline {
-            Thread.sleep(forTimeInterval: 0.05)
-        }
-        if process.isRunning {
+        if semaphore.wait(timeout: .now() + 4.0) == .timedOut, process.isRunning {
             process.terminate()
+            _ = semaphore.wait(timeout: .now() + 0.5)
         }
 
         let data = pipe.fileHandleForReading.readDataToEndOfFile()

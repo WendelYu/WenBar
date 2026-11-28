@@ -172,7 +172,7 @@ final class StatusBarController: NSObject {
     private var diskStatusItem: NSStatusItem?
 
     private var mainPanel: FloatingPanelController!
-    private var diskPanel: FloatingPanelController!
+    private var diskPanel: FloatingPanelController?
 
     private let clockVM: ClockViewModel
     private let calendarVM: CalendarViewModel
@@ -185,7 +185,6 @@ final class StatusBarController: NSObject {
     private let onOpenOnboarding: () -> Void
     private let onQuit: () -> Void
 
-    private var displayLinkTimer: Timer?
     private var lastClockRenderSignature: String = ""
     private var lastDiskBadgeCount: Int?
 
@@ -213,7 +212,7 @@ final class StatusBarController: NSObject {
 
         configurePanels()
         rebuildStatusItems()
-        startTitleSyncTimer()
+        bindStatusCallbacks()
     }
 
     func rebuildStatusItems() {
@@ -263,8 +262,8 @@ final class StatusBarController: NSObject {
                 NSStatusBar.system.removeStatusItem(existing)
                 diskStatusItem = nil
             }
-            if diskPanel.isShown {
-                diskPanel.close()
+            if diskPanel?.isShown == true {
+                diskPanel?.close()
             }
         }
     }
@@ -273,9 +272,24 @@ final class StatusBarController: NSObject {
         if mainPanel.isShown {
             mainPanel.close()
         } else if let button = clockStatusItem?.button {
-            if diskPanel.isShown { diskPanel.close() }
+            if diskPanel?.isShown == true { diskPanel?.close() }
             mainPanel.show(relativeTo: button)
         }
+    }
+
+    private func ensureDiskPanel() -> FloatingPanelController {
+        if let diskPanel {
+            return diskPanel
+        }
+        let panel = FloatingPanelController(
+            panelSize: NSSize(width: 370, height: 380),
+            rootView: DiskPopoverView(diskManager: diskManager, settingsStore: settingsStore)
+                .padding(14)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                .background(.regularMaterial)
+        )
+        diskPanel = panel
+        return panel
     }
 
     private func configurePanels() {
@@ -302,25 +316,18 @@ final class StatusBarController: NSObject {
                 }
             )
         )
-
-        diskPanel = FloatingPanelController(
-            panelSize: NSSize(width: 370, height: 380),
-            rootView: DiskPopoverView(diskManager: diskManager, settingsStore: settingsStore)
-                .padding(14)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                .background(.regularMaterial)
-        )
     }
 
-    private func startTitleSyncTimer() {
-        let timer = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in
-            Task { @MainActor in
-                self?.updateClockButtonTitle()
-                self?.updateStandaloneDiskItem()
-            }
+    private func bindStatusCallbacks() {
+        clockVM.onDisplayChanged = { [weak self] in
+            self?.updateClockButtonTitle()
         }
-        RunLoop.main.add(timer, forMode: .common)
-        displayLinkTimer = timer
+        archiveManager.onProgressChanged = { [weak self] in
+            self?.updateClockButtonTitle()
+        }
+        diskManager.onVolumesChanged = { [weak self] in
+            self?.updateStandaloneDiskItem()
+        }
     }
 
     private func updateClockButtonTitle() {
@@ -388,11 +395,11 @@ final class StatusBarController: NSObject {
     @objc private func handleDiskButtonClick(_ sender: NSStatusBarButton) {
         if NSApp.currentEvent?.type == .rightMouseDown {
             showContextMenu(from: sender)
-        } else if diskPanel.isShown {
-            diskPanel.close()
+        } else if let panel = diskPanel, panel.isShown {
+            panel.close()
         } else {
             if mainPanel.isShown { mainPanel.close() }
-            diskPanel.show(relativeTo: sender)
+            ensureDiskPanel().show(relativeTo: sender)
         }
     }
 

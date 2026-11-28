@@ -65,7 +65,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         registerGlobalHotkey()
-        observePasswordPrompts()
+        archiveManager.onPasswordRequired = { [weak self] req in
+            self?.archiveManager.pendingPasswordRequest = nil
+            self?.openPasswordWindow(request: req)
+        }
 
         if !settingsStore.settings.hasCompletedOnboarding && !launchedForBackgroundURL {
             openOnboardingWindow()
@@ -181,18 +184,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.orderFrontRegardless()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
-    }
-
-    private func observePasswordPrompts() {
-        Task { [weak self] in
-            while let self {
-                if let req = self.archiveManager.pendingPasswordRequest {
-                    self.archiveManager.pendingPasswordRequest = nil
-                    self.openPasswordWindow(request: req)
-                }
-                try? await Task.sleep(for: .milliseconds(300))
-            }
-        }
     }
 
     private func openPasswordWindow(request: PasswordPromptRequest) {

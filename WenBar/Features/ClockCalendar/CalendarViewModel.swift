@@ -125,6 +125,33 @@ final class CalendarViewModel {
         }
     }
 
+    private static let syncStatusFormatter: DateFormatter = {
+        let df = DateFormatter()
+        df.dateFormat = "MM-dd HH:mm"
+        return df
+    }()
+
+    private static let gregorianTitleFormatter: DateFormatter = {
+        let df = DateFormatter()
+        df.locale = Locale(identifier: "zh_CN")
+        df.dateFormat = "yyyy年M月d日 EEEE"
+        return df
+    }()
+
+    private static let monthTitleFormatter: DateFormatter = {
+        let df = DateFormatter()
+        df.locale = Locale(identifier: "zh_CN")
+        df.dateFormat = "yyyy年 M月"
+        return df
+    }()
+
+    private static let shortSummaryFormatter: DateFormatter = {
+        let df = DateFormatter()
+        df.locale = Locale(identifier: "zh_CN")
+        df.dateFormat = "M月d日 EEEE"
+        return df
+    }()
+
     private func observeDayAndWakeChanges() {
         let dayObs = NotificationCenter.default.addObserver(
             forName: .NSCalendarDayChanged,
@@ -132,7 +159,7 @@ final class CalendarViewModel {
             queue: .main
         ) { [weak self] _ in
             Task { @MainActor in
-                self?.refreshForPanelOpen()
+                self?.handleDayOrWakeChange()
             }
         }
         let wakeObs = NSWorkspace.shared.notificationCenter.addObserver(
@@ -141,10 +168,15 @@ final class CalendarViewModel {
             queue: .main
         ) { [weak self] _ in
             Task { @MainActor in
-                self?.refreshForPanelOpen()
+                self?.handleDayOrWakeChange()
             }
         }
         lifecycleObservers = [dayObs, wakeObs]
+    }
+
+    private func handleDayOrWakeChange() {
+        refreshForPanelOpen()
+        resyncCustomReminderNotifications()
     }
 
     func refreshForPanelOpen() {
@@ -153,7 +185,6 @@ final class CalendarViewModel {
         displayedMonth = now
         selectedDate = now
         refreshCustomReminders()
-        resyncCustomReminderNotifications()
         Task {
             await rebuildGrid()
             await refreshNextHoliday()
@@ -286,9 +317,7 @@ final class CalendarViewModel {
         let currentYear = gregorianCal.component(.year, from: Date())
         let updated = await holidayRepo.syncYears([currentYear, currentYear + 1])
         if updated > 0 {
-            let df = DateFormatter()
-            df.dateFormat = "MM-dd HH:mm"
-            holidaySyncStatus = "已同步 (\(df.string(from: Date())))"
+            holidaySyncStatus = "已同步 (\(Self.syncStatusFormatter.string(from: Date())))"
             await rebuildGrid()
             await refreshNextHoliday()
         } else {
@@ -324,7 +353,7 @@ final class CalendarViewModel {
             let localKey = CustomReminderEngine.dateKey(for: date)
             let holiday = await holidayRepo.holiday(forKey: key)
             let lunar = LunarCalendarEngine.info(for: date)
-            let subtitle = LunarCalendarEngine.cellSubtitle(for: date, holiday: holiday)
+            let subtitle = LunarCalendarEngine.cellSubtitle(for: date, holiday: holiday, precomputedInfo: lunar)
             let wd = gregorianCal.component(.weekday, from: date)
 
             days.append(
@@ -386,7 +415,12 @@ final class CalendarViewModel {
         }
 
         if remindersAccessGranted {
-            let fetched = await Self.fetchRemindersOffMain(using: eventStoreBox)
+            let completedStart = gregorianCal.date(byAdding: .day, value: -7, to: start) ?? start
+            let fetched = await Self.fetchRemindersOffMain(
+                using: eventStoreBox,
+                completedStart: completedStart,
+                completedEnd: end
+            )
             remindersForSelectedDate = fetched
                 .filter { reminder in
                     guard let due = reminder.dueDate else { return false }
@@ -409,9 +443,50 @@ final class CalendarViewModel {
         }
     }
 
-    private nonisolated static func fetchRemindersOffMain(using box: EventStoreBox) async -> [CalendarReminderItem] {
+    private nonisolated static func fetchRemindersOffMain(
+        using box: EventStoreBox,
+        completedStart: Date,
+        completedEnd: Date
+    ) async -> [CalendarReminderItem] {
+        let incomplete = await fetchRemindersMatchingIncomplete(using: box)
+        let recentCompleted = await fetchRemindersMatchingCompleted(using: box, from: completedStart, to: completedEnd)
+
+        var seen = Set<String>()
+        var combined: [CalendarReminderItem] = []
+        combined.reserveCapacity(incomplete.count + recentCompleted.count)
+        for item in incomplete where seen.insert(item.id).inserted {
+            combined.append(item)
+        }
+        for item in recentCompleted where seen.insert(item.id).inserted {
+            combined.append(item)
+        }
+        return combined
+    }
+
+    private nonisolated static func fetchRemindersMatchingIncomplete(using box: EventStoreBox) async -> [CalendarReminderItem] {
         await withCheckedContinuation { continuation in
-            let predicate = box.store.predicateForReminders(in: nil)
+            let predicate = box.store.predicateForIncompleteReminders(withDueDateStarting: nil, ending: nil, calendars: nil)
+            box.store.fetchReminders(matching: predicate) { reminders in
+                let mapped = (reminders ?? []).map { rem in
+                    CalendarReminderItem(
+                        id: rem.calendarItemIdentifier,
+                        title: rem.title ?? "(待办)",
+                        isCompleted: rem.isCompleted,
+                        dueDate: rem.dueDateComponents?.date
+                    )
+                }
+                continuation.resume(returning: mapped)
+            }
+        }
+    }
+
+    private nonisolated static func fetchRemindersMatchingCompleted(
+        using box: EventStoreBox,
+        from start: Date,
+        to end: Date
+    ) async -> [CalendarReminderItem] {
+        await withCheckedContinuation { continuation in
+            let predicate = box.store.predicateForCompletedReminders(withCompletionDateStarting: start, ending: end, calendars: nil)
             box.store.fetchReminders(matching: predicate) { reminders in
                 let mapped = (reminders ?? []).map { rem in
                     CalendarReminderItem(
@@ -589,10 +664,7 @@ final class CalendarViewModel {
     }
 
     var selectedDayGregorianTitle: String {
-        let df = DateFormatter()
-        df.locale = Locale(identifier: "zh_CN")
-        df.dateFormat = "yyyy年M月d日 EEEE"
-        return df.string(from: selectedDate)
+        Self.gregorianTitleFormatter.string(from: selectedDate)
     }
 
     var selectedDayFestivalsAndTerms: [String] {
@@ -620,18 +692,12 @@ final class CalendarViewModel {
     }
 
     var monthTitleString: String {
-        let df = DateFormatter()
-        df.locale = Locale(identifier: "zh_CN")
-        df.dateFormat = "yyyy年 M月"
-        return df.string(from: displayedMonth)
+        Self.monthTitleFormatter.string(from: displayedMonth)
     }
 
     var selectedDayFullSummary: String {
         let lunar = LunarCalendarEngine.info(for: selectedDate)
-        let df = DateFormatter()
-        df.locale = Locale(identifier: "zh_CN")
-        df.dateFormat = "M月d日 EEEE"
-        var parts = [df.string(from: selectedDate), lunar.fullLunarText]
+        var parts = [Self.shortSummaryFormatter.string(from: selectedDate), lunar.fullLunarText]
         if let term = lunar.solarTerm { parts.append(term) }
         if let fest = lunar.traditionalFestival { parts.append(fest) }
         return parts.joined(separator: " · ")

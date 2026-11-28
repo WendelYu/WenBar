@@ -155,6 +155,49 @@ public enum CustomReminderEngine {
 
     private static let beijingTimeZone = TimeZone(identifier: "Asia/Shanghai") ?? .current
 
+    private struct LunarLookupKey: Hashable, Sendable {
+        let lunarYear: Int
+        let month: Int
+        let day: Int
+        let isLeapMonth: Bool
+    }
+
+    private struct ResolvedGregorianDay: Sendable {
+        let year: Int
+        let month: Int
+        let day: Int
+    }
+
+    private final class LunarLookupCache: @unchecked Sendable {
+        private let lock = NSLock()
+        private var cache: [LunarLookupKey: ResolvedGregorianDay] = [:]
+
+        func get(_ key: LunarLookupKey) -> ResolvedGregorianDay? {
+            lock.lock()
+            defer { lock.unlock() }
+            return cache[key]
+        }
+
+        func set(_ value: ResolvedGregorianDay, for key: LunarLookupKey) {
+            lock.lock()
+            defer { lock.unlock() }
+            if cache.count >= 512 { cache.removeAll() }
+            cache[key] = value
+        }
+    }
+
+    private static let lunarLookupCache = LunarLookupCache()
+    private static let beijingChineseCalendar: Calendar = {
+        var cal = Calendar(identifier: .chinese)
+        cal.timeZone = beijingTimeZone
+        return cal
+    }()
+    private static let beijingGregorianCalendar: Calendar = {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = beijingTimeZone
+        return cal
+    }()
+
     public static func normalizedAdvanceDays(_ days: [Int]) -> [Int] {
         let unique = Set(days.map { max(0, min(365, $0)) })
         if unique.isEmpty {
@@ -188,54 +231,78 @@ public enum CustomReminderEngine {
         let clampedMonth = min(12, max(1, month))
         let clampedDay = min(30, max(1, day))
         let tz = timeZone ?? beijingTimeZone
+        let lookupKey = LunarLookupKey(
+            lunarYear: lunarYear,
+            month: clampedMonth,
+            day: clampedDay,
+            isLeapMonth: isLeapMonth
+        )
 
-        var scanCal = Calendar(identifier: .gregorian)
-        scanCal.timeZone = beijingTimeZone
+        let resolvedDay: ResolvedGregorianDay
+        if let cached = lunarLookupCache.get(lookupKey) {
+            resolvedDay = cached
+        } else {
+            let scanCal = beijingGregorianCalendar
+            let chineseCal = beijingChineseCalendar
+            guard let scanStart = scanCal.date(from: DateComponents(year: lunarYear, month: 1, day: 15, hour: 12)),
+                  let scanEnd = scanCal.date(from: DateComponents(year: lunarYear + 1, month: 2, day: 25, hour: 12)) else {
+                return nil
+            }
 
-        guard let scanStart = scanCal.date(from: DateComponents(year: lunarYear, month: 1, day: 15, hour: 12)),
-              let scanEnd = scanCal.date(from: DateComponents(year: lunarYear + 1, month: 2, day: 25, hour: 12)) else {
-            return nil
-        }
+            var exactMatch: Date?
+            var nonLeapMatch: Date?
+            var exactDay29Fallback: Date?
+            var nonLeapDay29Fallback: Date?
 
-        var exactMatch: Date?
-        var nonLeapMatch: Date?
-        var exactDay29Fallback: Date?
-        var nonLeapDay29Fallback: Date?
+            var cursor = scanStart
+            while cursor <= scanEnd {
+                let lComps = chineseCal.dateComponents([.month, .day, .isLeapMonth], from: cursor)
+                let gComps = scanCal.dateComponents([.year, .month], from: cursor)
+                let lMonth = lComps.month ?? 1
+                let lDay = lComps.day ?? 1
+                let lLeap = lComps.isLeapMonth ?? false
+                let gYear = gComps.year ?? lunarYear
+                let gMonth = gComps.month ?? 1
+                let approxYear = (gMonth <= 2 && lMonth >= 11) ? (gYear - 1) : gYear
 
-        var cursor = scanStart
-        while cursor <= scanEnd {
-            let info = LunarCalendarEngine.info(for: cursor)
-            if info.lunarYear == lunarYear && info.lunarMonth == clampedMonth {
-                if info.isLeapMonth == isLeapMonth {
-                    if info.lunarDay == clampedDay {
-                        exactMatch = cursor
-                        break
-                    } else if clampedDay == 30 && info.lunarDay == 29 {
-                        exactDay29Fallback = cursor
-                    }
-                } else if isLeapMonth && !info.isLeapMonth {
-                    if info.lunarDay == clampedDay && nonLeapMatch == nil {
-                        nonLeapMatch = cursor
-                    } else if clampedDay == 30 && info.lunarDay == 29 && nonLeapDay29Fallback == nil {
-                        nonLeapDay29Fallback = cursor
+                if approxYear == lunarYear && lMonth == clampedMonth {
+                    if lLeap == isLeapMonth {
+                        if lDay == clampedDay {
+                            exactMatch = cursor
+                            break
+                        } else if clampedDay == 30 && lDay == 29 {
+                            exactDay29Fallback = cursor
+                        }
+                    } else if isLeapMonth && !lLeap {
+                        if lDay == clampedDay && nonLeapMatch == nil {
+                            nonLeapMatch = cursor
+                        } else if clampedDay == 30 && lDay == 29 && nonLeapDay29Fallback == nil {
+                            nonLeapDay29Fallback = cursor
+                        }
                     }
                 }
+                guard let next = scanCal.date(byAdding: .day, value: 1, to: cursor) else { break }
+                cursor = next
             }
-            guard let next = scanCal.date(byAdding: .day, value: 1, to: cursor) else { break }
-            cursor = next
+
+            guard let resolvedBeijingNoon = exactMatch ?? exactDay29Fallback ?? nonLeapMatch ?? nonLeapDay29Fallback else {
+                return nil
+            }
+            let finalComps = scanCal.dateComponents([.year, .month, .day], from: resolvedBeijingNoon)
+            resolvedDay = ResolvedGregorianDay(
+                year: finalComps.year ?? lunarYear,
+                month: finalComps.month ?? 1,
+                day: finalComps.day ?? 1
+            )
+            lunarLookupCache.set(resolvedDay, for: lookupKey)
         }
 
-        guard let resolvedBeijingNoon = exactMatch ?? exactDay29Fallback ?? nonLeapMatch ?? nonLeapDay29Fallback else {
-            return nil
-        }
-
-        let gComps = scanCal.dateComponents([.year, .month, .day], from: resolvedBeijingNoon)
         var targetCal = Calendar(identifier: .gregorian)
         targetCal.timeZone = tz
         return targetCal.date(from: DateComponents(
-            year: gComps.year,
-            month: gComps.month,
-            day: gComps.day,
+            year: resolvedDay.year,
+            month: resolvedDay.month,
+            day: resolvedDay.day,
             hour: hour,
             minute: minute,
             second: 0

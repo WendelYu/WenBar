@@ -230,7 +230,10 @@ public enum LunarCalendarEngine {
     /// Priority display subtitle for a calendar grid cell:
     /// Statutory Holiday > Traditional Festival > Solar Term > Gregorian/Commemorative Festival > 三伏/数九首日 > Lunar Month (on 初一) > Lunar Day
     public static func cellSubtitle(for date: Date, holiday: HolidayDay?) -> String {
-        let info = self.info(for: date)
+        cellSubtitle(for: date, holiday: holiday, precomputedInfo: self.info(for: date))
+    }
+
+    public static func cellSubtitle(for date: Date, holiday: HolidayDay?, precomputedInfo info: LunarDateInfo) -> String {
         if let holiday, holiday.isOffDay, !holiday.name.isEmpty {
             return shortHolidayLabel(holiday.name)
         }

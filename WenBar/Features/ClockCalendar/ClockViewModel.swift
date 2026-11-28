@@ -27,6 +27,10 @@ final class ClockViewModel {
     private var lifecycleObservers: [NSObjectProtocol] = []
     private let settingsStore: SettingsStore
     var nextHolidayProvider: (() -> NextHolidayCountdown?)?
+    @ObservationIgnored var onDisplayChanged: (() -> Void)?
+
+    private static var worldClockCalendarCache: [String: Calendar] = [:]
+    private static var worldClockFormatterCache: [String: DateFormatter] = [:]
 
     init(settingsStore: SettingsStore, nextHolidayProvider: (() -> NextHolidayCountdown?)? = nil) {
         self.settingsStore = settingsStore
@@ -114,16 +118,36 @@ final class ClockViewModel {
             return ("--:--", "", "")
         }
 
-        let df = DateFormatter()
-        df.timeZone = tz
-        df.locale = Locale(identifier: "zh_CN")
-        df.dateFormat = "HH:mm"
+        let tzID = tz.identifier
+        let df: DateFormatter
+        if let cachedDF = Self.worldClockFormatterCache[tzID] {
+            df = cachedDF
+        } else {
+            let created = DateFormatter()
+            created.timeZone = tz
+            created.locale = Locale(identifier: "zh_CN")
+            created.dateFormat = "HH:mm"
+            Self.worldClockFormatterCache[tzID] = created
+            df = created
+        }
         let timeStr = df.string(from: currentDate)
 
-        var localCal = Calendar(identifier: .gregorian)
+        var localCal = Self.worldClockCalendarCache["__local__"] ?? {
+            var c = Calendar(identifier: .gregorian)
+            c.timeZone = .current
+            Self.worldClockCalendarCache["__local__"] = c
+            return c
+        }()
         localCal.timeZone = .current
-        var targetCal = Calendar(identifier: .gregorian)
-        targetCal.timeZone = tz
+        let targetCal: Calendar
+        if let cachedCal = Self.worldClockCalendarCache[tzID] {
+            targetCal = cachedCal
+        } else {
+            var created = Calendar(identifier: .gregorian)
+            created.timeZone = tz
+            Self.worldClockCalendarCache[tzID] = created
+            targetCal = created
+        }
 
         let localDay = localCal.dateComponents([.year, .month, .day], from: currentDate)
         let targetDay = targetCal.dateComponents([.year, .month, .day], from: currentDate)
@@ -167,6 +191,7 @@ final class ClockViewModel {
                     self?.handleTick()
                 }
             }
+            newTimer.tolerance = 0.05
             RunLoop.main.add(newTimer, forMode: .common)
             timer = newTimer
         } else {
@@ -180,6 +205,7 @@ final class ClockViewModel {
                     self?.scheduleNextTick()
                 }
             }
+            newTimer.tolerance = 0.2
             RunLoop.main.add(newTimer, forMode: .common)
             timer = newTimer
         }
@@ -209,26 +235,30 @@ final class ClockViewModel {
     }
 
     private func updateDisplay() {
+        let newTitle: String
         let settings = settingsStore.settings
-        guard settings.enableClockCalendar else {
-            menuBarTitle = "WenBar"
-            return
+        if !settings.enableClockCalendar {
+            newTitle = "WenBar"
+        } else {
+            let locale = effectiveLocale()
+            var title = ClockFormatEngine.format(
+                date: currentDate,
+                template: settings.clockFormatTemplate,
+                locale: locale,
+                nextHoliday: nextHolidayProvider?()
+            )
+
+            if isTimerRunning && settings.showCountdownInMenuBar {
+                let icon = timerMode == .pomodoro ? (isPomodoroBreak ? "☕" : "🍅") : "⏱"
+                title += " \(icon) \(formattedRemainingTime)"
+            }
+            newTitle = title
         }
 
-        let locale = effectiveLocale()
-        var title = ClockFormatEngine.format(
-            date: currentDate,
-            template: settings.clockFormatTemplate,
-            locale: locale,
-            nextHoliday: nextHolidayProvider?()
-        )
-
-        if isTimerRunning && settings.showCountdownInMenuBar {
-            let icon = timerMode == .pomodoro ? (isPomodoroBreak ? "☕" : "🍅") : "⏱"
-            title += " \(icon) \(formattedRemainingTime)"
+        if menuBarTitle != newTitle {
+            menuBarTitle = newTitle
+            onDisplayChanged?()
         }
-
-        menuBarTitle = title
     }
 
     private func effectiveLocale() -> Locale {

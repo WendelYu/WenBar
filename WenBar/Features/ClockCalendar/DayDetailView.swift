@@ -547,25 +547,37 @@ struct DayDetailView: View {
             )
     }
 
-    private func shortGregorianTitle(_ date: Date) -> String {
+    private static let shortGregorianFormatter: DateFormatter = {
         let df = DateFormatter()
         df.locale = Locale(identifier: "zh_CN")
         df.dateFormat = "M月d日 EEEE"
-        return df.string(from: date)
-    }
+        return df
+    }()
 
-    private func monthDayAndWeekday(_ date: Date) -> String {
+    private static let monthDayWeekdayFormatter: DateFormatter = {
         let df = DateFormatter()
         df.locale = Locale(identifier: "zh_CN")
         df.dateFormat = "M月d日 | EEE"
-        return df.string(from: date)
-    }
+        return df
+    }()
 
-    private func dateAndTimeText(_ date: Date) -> String {
+    private static let dateAndTimeFormatter: DateFormatter = {
         let df = DateFormatter()
         df.locale = Locale(identifier: "zh_CN")
         df.dateFormat = "M月d日 HH:mm | EEE"
-        return df.string(from: date)
+        return df
+    }()
+
+    private func shortGregorianTitle(_ date: Date) -> String {
+        Self.shortGregorianFormatter.string(from: date)
+    }
+
+    private func monthDayAndWeekday(_ date: Date) -> String {
+        Self.monthDayWeekdayFormatter.string(from: date)
+    }
+
+    private func dateAndTimeText(_ date: Date) -> String {
+        Self.dateAndTimeFormatter.string(from: date)
     }
 
     private func relativeNumber(to date: Date) -> String {
@@ -766,15 +778,19 @@ private struct QuickNewReminderSheet: View {
         )
     }
 
+    private static let lunarPreviewFormatter: DateFormatter = {
+        let df = DateFormatter()
+        df.locale = Locale(identifier: "zh_CN")
+        df.dateFormat = "yyyy年M月d日 EEE"
+        return df
+    }()
+
     private var lunarPreviewText: String {
         let effectiveYear: Int
         if repeatRule == .once {
             effectiveYear = lunarYear
         } else if let next = CustomReminderEngine.nextOccurrence(of: draftReminder, after: Date()) {
-            let df = DateFormatter()
-            df.locale = Locale(identifier: "zh_CN")
-            df.dateFormat = "yyyy年M月d日 EEE"
-            return "下次对应公历：\(df.string(from: next.targetDate))"
+            return "下次对应公历：\(Self.lunarPreviewFormatter.string(from: next.targetDate))"
         } else {
             effectiveYear = Calendar.current.component(.year, from: Date())
         }
@@ -786,10 +802,7 @@ private struct QuickNewReminderSheet: View {
             isLeapMonth: isLeapMonth,
             timeZone: .current
         ) {
-            let df = DateFormatter()
-            df.locale = Locale(identifier: "zh_CN")
-            df.dateFormat = "yyyy年M月d日 EEE"
-            return "对应公历：\(df.string(from: gDate))"
+            return "对应公历：\(Self.lunarPreviewFormatter.string(from: gDate))"
         }
         return "未能匹配到对应公历日期"
     }

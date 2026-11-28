@@ -21,9 +21,20 @@ struct PasswordPromptRequest: Identifiable {
 @MainActor
 @Observable
 final class ArchiveTaskManager {
-    var activeTask: ArchiveTaskProgress?
-    var pendingPasswordRequest: PasswordPromptRequest?
+    var activeTask: ArchiveTaskProgress? {
+        didSet { onProgressChanged?() }
+    }
+    var pendingPasswordRequest: PasswordPromptRequest? {
+        didSet {
+            if let req = pendingPasswordRequest {
+                onPasswordRequired?(req)
+            }
+        }
+    }
     var lastStatusMessage: String?
+
+    @ObservationIgnored var onProgressChanged: (() -> Void)?
+    @ObservationIgnored var onPasswordRequired: ((PasswordPromptRequest) -> Void)?
 
     private var currentProcess: Process?
     private var isCancelled: Bool = false
